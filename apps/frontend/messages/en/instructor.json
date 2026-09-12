@@ -1,0 +1,9 @@
+{
+  "dashboard": "Instructor Dashboard",
+  "courses": "Instructor Courses",
+  "practice": "Practice Problems",
+  "createCourse": "Create Course",
+  "createProblem": "Create Problem",
+  "courseManagement": "Course Management",
+  "practiceManagement": "Practice Management"
+}

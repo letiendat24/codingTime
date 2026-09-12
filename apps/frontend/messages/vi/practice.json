@@ -1,0 +1,21 @@
+{
+  "title": "Practice Center",
+  "description": "Bài luyện code độc lập với khóa học.",
+  "openWorkspace": "Mở workspace",
+  "problem": "Đề bài",
+  "code": "Code",
+  "result": "Kết quả",
+  "submissions": "Lần nộp",
+  "publicTests": "Test công khai",
+  "bestScore": "Điểm tốt nhất",
+  "published": "Đã xuất bản",
+  "attempted": "Đã thử",
+  "solved": "Đã giải",
+  "difficulty": "Độ khó",
+  "tags": "Thẻ",
+  "empty": "Không có bài luyện phù hợp bộ lọc.",
+  "noProblems": "Không có bài luyện phù hợp bộ lọc.",
+  "runOutput": "Kết quả chạy",
+  "judgeResult": "Kết quả chấm",
+  "submissionHistory": "Lịch sử nộp"
+}

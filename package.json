@@ -1,0 +1,35 @@
+{
+  "name": "codesync",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Interactive programming learning platform monorepo.",
+  "packageManager": "pnpm@11.10.0",
+  "scripts": {
+    "dev": "pnpm -r --parallel --if-present dev",
+    "dev:frontend": "pnpm --filter @codesync/frontend dev",
+    "dev:backend": "pnpm --filter @codesync/backend dev",
+    "build": "pnpm -r --if-present build",
+    "lint": "pnpm -r --if-present lint",
+    "test": "pnpm -r --if-present test",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "format": "prettier --write .",
+    "db:migrate": "pnpm --filter @codesync/backend db:migrate",
+    "db:seed": "pnpm --filter @codesync/backend db:seed",
+    "infra:up": "docker compose -f infra/docker/docker-compose.yml up -d",
+    "infra:down": "docker compose -f infra/docker/docker-compose.yml down"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "@next/eslint-plugin-next": "^15.1.4",
+    "eslint-config-next": "^15.1.4",
+    "eslint": "^9.18.0",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0"
+  }
+}

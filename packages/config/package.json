@@ -1,0 +1,6 @@
+{
+  "name": "@codesync/config",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Shared development configuration for CodeSync."
+}

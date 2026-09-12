@@ -1,0 +1,14 @@
+{
+  "catalogTitle": "Courses",
+  "catalogDescription": "Published CodeSync catalog.",
+  "courseDetail": "Course detail",
+  "curriculum": "Curriculum",
+  "enroll": "Enroll",
+  "continueLearning": "Continue learning",
+  "noCourses": "No courses are available yet.",
+  "myCoursesTitle": "My Courses",
+  "inProgress": "In progress",
+  "completed": "Completed",
+  "lessons": "{completed}/{total} lessons",
+  "publishedCatalog": "Published learning paths for building real programming skills."
+}

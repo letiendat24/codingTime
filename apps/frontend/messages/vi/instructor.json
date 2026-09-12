@@ -1,0 +1,9 @@
+{
+  "dashboard": "Tổng quan giảng viên",
+  "courses": "Khóa học giảng viên",
+  "practice": "Bài luyện",
+  "createCourse": "Tạo khóa học",
+  "createProblem": "Tạo bài luyện",
+  "courseManagement": "Quản lý khóa học",
+  "practiceManagement": "Quản lý bài luyện"
+}

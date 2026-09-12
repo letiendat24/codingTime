@@ -1,0 +1,187 @@
+name: codesync
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: codesync-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-codesync}
+      POSTGRES_USER: ${POSTGRES_USER:-codesync}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-codesync_dev_password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: codesync-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: codesync-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-codesync}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-codesync_dev_password}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    container_name: codesync-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-codesync}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-codesync_dev_password}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: codesync-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-codesync}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-codesync_dev_password}
+      MINIO_BUCKET: ${MINIO_BUCKET:-codesync-local}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        mc alias set local http://minio:9000 "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY" &&
+        mc mb --ignore-existing "local/$$MINIO_BUCKET"
+    restart: "no"
+
+  video-worker:
+    build:
+      context: ../..
+      dockerfile: apps/workers/video-processing/Dockerfile
+    container_name: codesync-video-worker
+    profiles: ["workers"]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: development
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-codesync}:${RABBITMQ_DEFAULT_PASS:-codesync_dev_password}@rabbitmq:5672
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-codesync}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-codesync_dev_password}
+      MINIO_BUCKET: ${MINIO_BUCKET:-codesync-local}
+      VIDEO_WORKER_CONCURRENCY: ${VIDEO_WORKER_CONCURRENCY:-1}
+      VIDEO_PROCESSING_MAX_ATTEMPTS: ${VIDEO_PROCESSING_MAX_ATTEMPTS:-3}
+    restart: unless-stopped
+
+  code-worker:
+    build:
+      context: ../..
+      dockerfile: apps/workers/code-execution/Dockerfile
+    container_name: codesync-code-worker
+    profiles: ["workers"]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-codesync}:${RABBITMQ_DEFAULT_PASS:-codesync_dev_password}@rabbitmq:5672
+      CODE_EXECUTION_TIMEOUT_MS: ${CODE_EXECUTION_TIMEOUT_MS:-5000}
+      CODE_EXECUTION_MEMORY_MB: ${CODE_EXECUTION_MEMORY_MB:-128}
+      CODE_EXECUTION_CPU_LIMIT: ${CODE_EXECUTION_CPU_LIMIT:-0.5}
+      CODE_EXECUTION_PIDS_LIMIT: ${CODE_EXECUTION_PIDS_LIMIT:-64}
+      CODE_EXECUTION_MAX_OUTPUT_BYTES: ${CODE_EXECUTION_MAX_OUTPUT_BYTES:-100000}
+      CODE_EXECUTION_WORKER_CONCURRENCY: ${CODE_EXECUTION_WORKER_CONCURRENCY:-2}
+      CODE_EXECUTION_MAX_ATTEMPTS: ${CODE_EXECUTION_MAX_ATTEMPTS:-3}
+    volumes:
+      - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+    restart: unless-stopped
+
+  code-judge-worker:
+    build:
+      context: ../..
+      dockerfile: apps/workers/code-judge/Dockerfile
+    container_name: codesync-code-judge-worker
+    profiles: ["workers"]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-codesync}:${RABBITMQ_DEFAULT_PASS:-codesync_dev_password}@rabbitmq:5672
+      JUDGE_MAX_OUTPUT_BYTES: ${JUDGE_MAX_OUTPUT_BYTES:-100000}
+      JUDGE_WORKER_CONCURRENCY: ${JUDGE_WORKER_CONCURRENCY:-2}
+      JUDGE_MAX_ATTEMPTS: ${JUDGE_MAX_ATTEMPTS:-3}
+      JUDGE_CPU_LIMIT: ${CODE_EXECUTION_CPU_LIMIT:-0.5}
+      JUDGE_PIDS_LIMIT: ${CODE_EXECUTION_PIDS_LIMIT:-64}
+    volumes:
+      - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+    restart: unless-stopped
+
+  project-grading-worker:
+    build:
+      context: ../..
+      dockerfile: apps/workers/project-grading/Dockerfile
+    container_name: codesync-project-grading-worker
+    profiles: ["workers"]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-codesync}:${RABBITMQ_DEFAULT_PASS:-codesync_dev_password}@rabbitmq:5672
+      PROJECT_GRADING_WORKER_CONCURRENCY: ${PROJECT_GRADING_WORKER_CONCURRENCY:-1}
+      PROJECT_GRADING_MAX_ATTEMPTS: ${PROJECT_GRADING_MAX_ATTEMPTS:-3}
+      PROJECT_MAX_OUTPUT_BYTES: ${PROJECT_MAX_OUTPUT_BYTES:-100000}
+      PROJECT_GRADING_CPU_LIMIT: ${PROJECT_GRADING_CPU_LIMIT:-0.5}
+      PROJECT_GRADING_MEMORY_MB: ${PROJECT_GRADING_MEMORY_MB:-512}
+      PROJECT_GRADING_PIDS_LIMIT: ${PROJECT_GRADING_PIDS_LIMIT:-128}
+      PROJECT_GRADING_TEMP_ROOT: ${PROJECT_GRADING_TEMP_ROOT:-/tmp/codesync-project-grading}
+    volumes:
+      - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  rabbitmq-data:
+  minio-data:

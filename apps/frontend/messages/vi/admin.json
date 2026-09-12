@@ -1,0 +1,13 @@
+{
+  "dashboard": "Tổng quan nền tảng",
+  "users": "Người dùng",
+  "instructors": "Giảng viên",
+  "courses": "Khóa học",
+  "enrollments": "Ghi danh",
+  "operations": "Vận hành",
+  "auditLogs": "Nhật ký audit",
+  "platformHealth": "Sức khỏe hệ thống",
+  "recentActivity": "Hoạt động gần đây",
+  "userManagement": "Quản lý người dùng",
+  "adminRequired": "Cần quyền quản trị."
+}

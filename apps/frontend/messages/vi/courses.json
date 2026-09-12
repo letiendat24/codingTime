@@ -1,0 +1,14 @@
+{
+  "catalogTitle": "Khóa học",
+  "catalogDescription": "Danh mục khóa học đã xuất bản.",
+  "courseDetail": "Chi tiết khóa học",
+  "curriculum": "Nội dung học",
+  "enroll": "Ghi danh",
+  "continueLearning": "Tiếp tục học",
+  "noCourses": "Chưa có khóa học nào.",
+  "myCoursesTitle": "Khóa học của tôi",
+  "inProgress": "Đang học",
+  "completed": "Hoàn thành",
+  "lessons": "{completed}/{total} bài học",
+  "publishedCatalog": "Các lộ trình học lập trình thực tế đã xuất bản."
+}

@@ -1,0 +1,17 @@
+{
+  "title": "Notifications",
+  "description": "Review platform updates tied to your account.",
+  "settingsTitle": "Notification Settings",
+  "settingsDescription": "Choose which notification categories are stored for your account.",
+  "markAllRead": "Mark all read",
+  "markRead": "Mark read",
+  "markUnread": "Mark unread",
+  "open": "Open",
+  "viewAll": "View all",
+  "empty": "No notifications yet.",
+  "all": "All",
+  "unread": "Unread",
+  "read": "Read",
+  "allCategories": "All categories",
+  "allTypes": "All types"
+}

@@ -1,0 +1,1174 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+
+enum RoleName {
+  STUDENT
+  INSTRUCTOR
+  ADMIN
+}
+
+enum CourseStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum CourseDifficulty {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+enum LessonType {
+  VIDEO
+  ARTICLE
+  CODING
+  PROJECT
+  QUIZ
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum LessonProgressStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum LearningActivityType {
+  COURSE_ENROLLED
+  LESSON_STARTED
+  LESSON_COMPLETED
+  COURSE_COMPLETED
+  VIDEO_STARTED
+  VIDEO_COMPLETED
+  CHECKPOINT_COMPLETED
+  CODING_SUBMITTED
+  CODING_PASSED
+  PRACTICE_ATTEMPTED
+  PRACTICE_SOLVED
+  PROJECT_SUBMITTED
+  PROJECT_PASSED
+}
+
+enum VideoAssetStatus {
+  CREATED
+  UPLOADING
+  UPLOADED
+  QUEUED
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum VideoProcessingJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum VideoCheckpointType {
+  INFO
+  QUIZ
+  CODING
+  PROJECT
+}
+
+enum CheckpointProgressStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum ExecutionStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  TIMED_OUT
+}
+
+enum ScoringMode {
+  ALL_OR_NOTHING
+  WEIGHTED
+}
+
+enum TestCaseVisibility {
+  PUBLIC
+  HIDDEN
+}
+
+enum JudgeSubmissionStatus {
+  QUEUED
+  RUNNING
+  ACCEPTED
+  REJECTED
+  FAILED
+  TIMED_OUT
+}
+
+enum TestCaseResultStatus {
+  PASSED
+  WRONG_ANSWER
+  RUNTIME_ERROR
+  TIME_LIMIT_EXCEEDED
+  MEMORY_LIMIT_EXCEEDED
+  INTERNAL_ERROR
+}
+
+enum PracticeDifficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum PracticeProblemStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum PracticeProgressStatus {
+  NOT_STARTED
+  ATTEMPTED
+  SOLVED
+}
+
+enum RepositoryProvider {
+  GITHUB
+}
+
+enum ProjectCriterionType {
+  AUTO
+  MANUAL
+}
+
+enum ProjectAutoCheckType {
+  FILE_EXISTS
+  JSON_FIELD
+  BUILD_SUCCESS
+  TEST_SUCCESS
+  DEPLOYMENT_HEALTH
+}
+
+enum ProjectSubmissionStatus {
+  QUEUED
+  CLONING
+  GRADING
+  AWAITING_REVIEW
+  PASSED
+  FAILED
+  ERROR
+  TIMED_OUT
+}
+
+enum ProjectRubricResultStatus {
+  PASSED
+  FAILED
+  PENDING_MANUAL
+  ERROR
+}
+
+enum NotificationType {
+  JUDGE_COMPLETED
+  PRACTICE_SOLVED
+  PROJECT_SUBMITTED
+  PROJECT_GRADED
+  PROJECT_MANUAL_REVIEW_REQUIRED
+  VIDEO_PROCESSING_COMPLETED
+  VIDEO_PROCESSING_FAILED
+  COURSE_PUBLISHED
+  COURSE_UPDATED
+  ADMIN_OPERATION_ALERT
+}
+
+enum NotificationCategory {
+  LEARNING
+  PRACTICE
+  PROJECT
+  COURSE
+  SYSTEM
+}
+
+model User {
+  id           String     @id @default(uuid()) @db.Uuid
+  email        String     @unique
+  passwordHash String
+  displayName  String
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  roles    UserRole[]
+  sessions Session[]
+  ownedCourses Course[] @relation("InstructorCourses")
+  enrollments Enrollment[]
+  lessonProgress LessonProgress[]
+  videoProgress VideoProgress[]
+  checkpointProgress CheckpointProgress[]
+  learningActivities LearningActivity[]
+  createdVideoAssets VideoAsset[]
+  codeSnapshots CodeSnapshot[]
+  workspaces Workspace[]
+  executionRequests ExecutionRequest[]
+  judgeSubmissions JudgeSubmission[]
+  projectSubmissions ProjectSubmission[]
+  createdPracticeProblems PracticeProblem[] @relation("PracticeProblemAuthor")
+  practiceProgress PracticeProgress[]
+  adminAuditLogs AdminAuditLog[] @relation("AdminAuditActor")
+  notifications Notification[]
+  notificationPreference NotificationPreference?
+
+  @@map("users")
+}
+
+model Role {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      RoleName @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users UserRole[]
+
+  @@map("roles")
+}
+
+model UserRole {
+  userId    String   @db.Uuid
+  roleId    String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model Session {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @db.Uuid
+  refreshTokenHash String    @unique
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  userAgent        String?
+  ipAddress        String?
+  lastUsedAt       DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model CourseCategory {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  courses Course[]
+
+  @@map("course_categories")
+}
+
+model CourseTag {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  courses CourseTagAssignment[]
+
+  @@map("course_tags")
+}
+
+model CourseTagAssignment {
+  courseId String @db.Uuid
+  tagId    String @db.Uuid
+
+  course Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  tag    CourseTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([courseId, tagId])
+  @@map("course_tag_assignments")
+}
+
+model Course {
+  id                 String           @id @default(uuid()) @db.Uuid
+  title              String
+  slug               String           @unique
+  shortDescription   String?
+  description        String?
+  status             CourseStatus     @default(DRAFT)
+  difficulty         CourseDifficulty
+  thumbnailObjectKey String?
+  ownerInstructorId  String           @db.Uuid
+  categoryId         String           @db.Uuid
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  publishedAt        DateTime?
+  archivedAt         DateTime?
+
+  ownerInstructor User                  @relation("InstructorCourses", fields: [ownerInstructorId], references: [id], onDelete: Restrict)
+  category        CourseCategory        @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  tags            CourseTagAssignment[]
+  modules         CourseModule[]
+  enrollments     Enrollment[]
+  learningActivities LearningActivity[]
+
+  @@index([ownerInstructorId])
+  @@index([status])
+  @@index([categoryId])
+  @@map("courses")
+}
+
+model CourseModule {
+  id          String   @id @default(uuid()) @db.Uuid
+  courseId    String   @db.Uuid
+  title       String
+  description String?
+  position    Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  course  Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons Lesson[]
+
+  @@unique([courseId, position])
+  @@index([courseId])
+  @@map("course_modules")
+}
+
+model Lesson {
+  id          String     @id @default(uuid()) @db.Uuid
+  moduleId    String     @db.Uuid
+  title       String
+  description String?
+  position    Int
+  lessonType  LessonType
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  module CourseModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  progress LessonProgress[]
+  learningActivities LearningActivity[]
+  videoAsset VideoAsset?
+  videoProgress VideoProgress[]
+  videoCheckpoints VideoCheckpoint[]
+  codeSnapshots CodeSnapshot[]
+  workspaces Workspace[]
+  codeAlongConfig VideoCodeAlongConfig?
+
+  @@unique([moduleId, position])
+  @@index([moduleId])
+  @@map("lessons")
+}
+
+model VideoCodeAlongConfig {
+  id        String   @id @default(uuid()) @db.Uuid
+  lessonId  String   @unique @db.Uuid
+  enabled   Boolean  @default(false)
+  language  String
+  entryFile String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@map("video_code_along_configs")
+}
+
+model Enrollment {
+  id         String           @id @default(uuid()) @db.Uuid
+  studentId  String           @db.Uuid
+  courseId   String           @db.Uuid
+  status     EnrollmentStatus @default(ACTIVE)
+  enrolledAt DateTime         @default(now())
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  student User   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  course  Course @relation(fields: [courseId], references: [id], onDelete: Restrict)
+  courseProgress CourseProgress?
+  lessonProgress LessonProgress[]
+  learningActivities LearningActivity[]
+
+  @@unique([studentId, courseId])
+  @@index([courseId])
+  @@map("enrollments")
+}
+
+model CourseProgress {
+  id               String    @id @default(uuid()) @db.Uuid
+  enrollmentId     String    @unique @db.Uuid
+  totalLessons     Int       @default(0)
+  completedLessons Int       @default(0)
+  progressPercent  Decimal   @default(0) @db.Decimal(5, 2)
+  startedAt        DateTime  @default(now())
+  lastAccessedAt   DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+
+  @@map("course_progress")
+}
+
+model LessonProgress {
+  id             String               @id @default(uuid()) @db.Uuid
+  studentId      String               @db.Uuid
+  lessonId       String               @db.Uuid
+  enrollmentId   String               @db.Uuid
+  status         LessonProgressStatus @default(NOT_STARTED)
+  startedAt      DateTime?
+  lastAccessedAt DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  student    User       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  lesson     Lesson     @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, lessonId])
+  @@index([enrollmentId])
+  @@index([lessonId])
+  @@map("lesson_progress")
+}
+
+model LearningActivity {
+  id           String               @id @default(uuid()) @db.Uuid
+  userId       String               @db.Uuid
+  type         LearningActivityType
+  courseId     String?              @db.Uuid
+  lessonId     String?              @db.Uuid
+  enrollmentId String?              @db.Uuid
+  metadata     Json?
+  createdAt    DateTime             @default(now())
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course     Course?     @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  lesson     Lesson?     @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  enrollment Enrollment? @relation(fields: [enrollmentId], references: [id], onDelete: SetNull)
+
+  @@index([userId, type, enrollmentId])
+  @@index([userId, createdAt])
+  @@index([courseId])
+  @@index([lessonId])
+  @@map("learning_activities")
+}
+
+model StoredObject {
+  id          String   @id @default(uuid()) @db.Uuid
+  bucket      String
+  objectKey   String
+  contentType String
+  sizeBytes   BigInt
+  etag        String?
+  createdAt   DateTime @default(now())
+
+  sourceVideoAssets VideoAsset[] @relation("VideoSourceObject")
+
+  @@unique([bucket, objectKey])
+  @@index([objectKey])
+  @@map("stored_objects")
+}
+
+model VideoAsset {
+  id                      String           @id @default(uuid()) @db.Uuid
+  lessonId                String           @unique @db.Uuid
+  status                  VideoAssetStatus @default(CREATED)
+  originalFilename        String
+  mimeType                String
+  sizeBytes               BigInt
+  durationSeconds         Int?
+  width                   Int?
+  height                  Int?
+  sourceObjectKey         String
+  sourceObjectId          String?          @db.Uuid
+  masterPlaylistObjectKey String?
+  thumbnailObjectKey      String?
+  processingProgress      Int              @default(0)
+  createdByUserId         String           @db.Uuid
+  createdAt               DateTime         @default(now())
+  updatedAt               DateTime         @updatedAt
+  readyAt                 DateTime?
+  failedAt                DateTime?
+
+  lesson        Lesson        @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  createdBy     User          @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+  sourceObject  StoredObject? @relation("VideoSourceObject", fields: [sourceObjectId], references: [id], onDelete: SetNull)
+  jobs          VideoProcessingJob[]
+  renditions    VideoRendition[]
+  failures      VideoProcessingFailure[]
+  progress      VideoProgress[]
+  checkpoints   VideoCheckpoint[]
+  codeSnapshots CodeSnapshot[]
+
+  @@index([status])
+  @@index([createdByUserId])
+  @@map("video_assets")
+}
+
+model VideoProgress {
+  id                      String    @id @default(uuid()) @db.Uuid
+  studentId               String    @db.Uuid
+  videoAssetId            String    @db.Uuid
+  lessonId                String    @db.Uuid
+  lastPositionSeconds     Int       @default(0)
+  furthestPositionSeconds Int       @default(0)
+  watchedPercent          Int       @default(0)
+  startedAt               DateTime  @default(now())
+  lastWatchedAt           DateTime  @default(now())
+  completedAt             DateTime?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  student    User       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  videoAsset VideoAsset @relation(fields: [videoAssetId], references: [id], onDelete: Cascade)
+  lesson     Lesson     @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, videoAssetId])
+  @@index([studentId, lessonId])
+  @@index([videoAssetId])
+  @@map("video_progress")
+}
+
+model VideoCheckpoint {
+  id               String              @id @default(uuid()) @db.Uuid
+  lessonId         String              @db.Uuid
+  videoAssetId     String              @db.Uuid
+  timestampSeconds Int
+  type             VideoCheckpointType
+  title            String
+  description      String?
+  required         Boolean             @default(false)
+  pauseVideo       Boolean             @default(true)
+  position         Int                 @default(0)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  lesson     Lesson               @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  videoAsset VideoAsset           @relation(fields: [videoAssetId], references: [id], onDelete: Cascade)
+  progress   CheckpointProgress[]
+  workspaces Workspace[]
+  codingConfig CodingCheckpointConfig?
+  judgeSubmissions JudgeSubmission[]
+  projectConfig ProjectCheckpointConfig?
+  projectSubmissions ProjectSubmission[]
+
+  @@index([videoAssetId, timestampSeconds, position])
+  @@index([lessonId])
+  @@map("video_checkpoints")
+}
+
+model CodingCheckpointConfig {
+  id               String   @id @default(uuid()) @db.Uuid
+  checkpointId     String   @unique @db.Uuid
+  language         String
+  entryFile        String
+  starterFilesJson Json
+  timeLimitMs      Int      @default(5000)
+  memoryLimitMb    Int      @default(128)
+  passScore        Decimal  @default(70) @db.Decimal(5, 2)
+  scoringMode      ScoringMode @default(WEIGHTED)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  checkpoint VideoCheckpoint @relation(fields: [checkpointId], references: [id], onDelete: Cascade)
+  testCases TestCase[]
+  submissions JudgeSubmission[]
+
+  @@map("coding_checkpoint_configs")
+}
+
+model CheckpointProgress {
+  id           String                   @id @default(uuid()) @db.Uuid
+  studentId    String                   @db.Uuid
+  checkpointId String                   @db.Uuid
+  status       CheckpointProgressStatus @default(NOT_STARTED)
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @updatedAt
+
+  student    User            @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  checkpoint VideoCheckpoint @relation(fields: [checkpointId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, checkpointId])
+  @@index([checkpointId])
+  @@map("checkpoint_progress")
+}
+
+model CodeSnapshot {
+  id               String   @id @default(uuid()) @db.Uuid
+  lessonId         String   @db.Uuid
+  videoAssetId     String   @db.Uuid
+  timestampSeconds Int
+  title            String?
+  language         String
+  filesJson        Json
+  createdByUserId  String   @db.Uuid
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  lesson     Lesson     @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  videoAsset VideoAsset @relation(fields: [videoAssetId], references: [id], onDelete: Cascade)
+  createdBy  User       @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@index([videoAssetId, timestampSeconds])
+  @@index([lessonId])
+  @@index([createdByUserId])
+  @@map("code_snapshots")
+}
+
+model Workspace {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String    @db.Uuid
+  lessonId          String?   @db.Uuid
+  checkpointId      String?   @db.Uuid
+  practiceProblemId String?   @db.Uuid
+  language          String
+  entryFile         String
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  lastOpenedAt      DateTime?
+
+  user              User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson            Lesson?          @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  checkpoint        VideoCheckpoint? @relation(fields: [checkpointId], references: [id], onDelete: SetNull)
+  files             WorkspaceFile[]
+  revisions         WorkspaceRevision[]
+  executionRequests ExecutionRequest[]
+  judgeSubmissions  JudgeSubmission[]
+  practiceProblem   PracticeProblem?    @relation(fields: [practiceProblemId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, checkpointId])
+  @@index([userId])
+  @@index([lessonId])
+  @@index([checkpointId])
+  @@index([practiceProblemId])
+  @@map("workspaces")
+}
+
+model WorkspaceRevision {
+  id          String   @id @default(uuid()) @db.Uuid
+  workspaceId String   @db.Uuid
+  source      String
+  filesJson   Json
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@map("workspace_revisions")
+}
+
+model WorkspaceFile {
+  id          String   @id @default(uuid()) @db.Uuid
+  workspaceId String   @db.Uuid
+  path        String
+  content     String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, path])
+  @@index([workspaceId])
+  @@map("workspace_files")
+}
+
+model ExecutionRequest {
+  id                String          @id @default(uuid()) @db.Uuid
+  workspaceId       String          @db.Uuid
+  userId            String          @db.Uuid
+  language          String
+  entryFile         String
+  filesSnapshotJson Json
+  status            ExecutionStatus @default(QUEUED)
+  jobId             String          @unique
+  idempotencyKey    String          @unique
+  correlationId     String
+  createdAt         DateTime        @default(now())
+  queuedAt          DateTime        @default(now())
+  startedAt         DateTime?
+  completedAt       DateTime?
+  failedAt          DateTime?
+
+  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  result    ExecutionResult?
+
+  @@index([workspaceId, createdAt])
+  @@index([userId, status])
+  @@index([correlationId])
+  @@map("execution_requests")
+}
+
+model ExecutionResult {
+  id                 String   @id @default(uuid()) @db.Uuid
+  executionRequestId String   @unique @db.Uuid
+  exitCode           Int?
+  stdout             String
+  stderr             String
+  durationMs         Int
+  memoryBytes        BigInt?
+  errorCode          String?
+  createdAt          DateTime @default(now())
+
+  executionRequest ExecutionRequest @relation(fields: [executionRequestId], references: [id], onDelete: Cascade)
+
+  @@map("execution_results")
+}
+
+model TestCase {
+  id                       String             @id @default(uuid()) @db.Uuid
+  codingCheckpointConfigId String             @db.Uuid
+  name                     String
+  visibility               TestCaseVisibility
+  input                    String
+  expectedOutput           String
+  weight                   Decimal            @db.Decimal(8, 2)
+  position                 Int
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+
+  codingConfig CodingCheckpointConfig @relation(fields: [codingCheckpointConfigId], references: [id], onDelete: Cascade)
+  results      TestCaseResult[]
+
+  @@unique([codingCheckpointConfigId, position])
+  @@index([codingCheckpointConfigId, visibility])
+  @@map("test_cases")
+}
+
+model JudgeSubmission {
+  id                       String                @id @default(uuid()) @db.Uuid
+  userId                   String                @db.Uuid
+  workspaceId              String                @db.Uuid
+  checkpointId             String?               @db.Uuid
+  codingCheckpointConfigId String?               @db.Uuid
+  practiceProblemId        String?               @db.Uuid
+  language                 String
+  entryFile                String
+  filesSnapshotJson        Json
+  status                   JudgeSubmissionStatus @default(QUEUED)
+  jobId                    String                @unique
+  idempotencyKey           String                @unique
+  correlationId            String
+  score                    Decimal?              @db.Decimal(5, 2)
+  passed                   Boolean?
+  submittedAt              DateTime              @default(now())
+  startedAt                DateTime?
+  completedAt              DateTime?
+  failedAt                 DateTime?
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+
+  user         User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace    Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  checkpoint   VideoCheckpoint?       @relation(fields: [checkpointId], references: [id], onDelete: Cascade)
+  codingConfig CodingCheckpointConfig? @relation(fields: [codingCheckpointConfigId], references: [id], onDelete: Restrict)
+  practiceProblem PracticeProblem?    @relation(fields: [practiceProblemId], references: [id], onDelete: Cascade)
+  result       JudgeResult?
+
+  @@index([userId, createdAt])
+  @@index([checkpointId, createdAt])
+  @@index([practiceProblemId, userId, submittedAt])
+  @@index([status])
+  @@index([correlationId])
+  @@map("judge_submissions")
+}
+
+model PracticeProblem {
+  id               String                @id @default(uuid()) @db.Uuid
+  createdByUserId  String                @db.Uuid
+  title            String
+  slug             String                @unique
+  description      String
+  difficulty       PracticeDifficulty
+  status           PracticeProblemStatus @default(DRAFT)
+  language         String                @default("javascript")
+  entryFile        String                @default("index.js")
+  starterFilesJson Json
+  timeLimitMs      Int                   @default(5000)
+  memoryLimitMb    Int                   @default(128)
+  passScore        Decimal               @default(70) @db.Decimal(5, 2)
+  scoringMode      ScoringMode           @default(WEIGHTED)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  publishedAt      DateTime?
+  archivedAt       DateTime?
+
+  createdBy        User                      @relation("PracticeProblemAuthor", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  tags             PracticeProblemTag[]
+  testCases        PracticeProblemTestCase[]
+  progress         PracticeProgress[]
+  workspaces       Workspace[]
+  judgeSubmissions JudgeSubmission[]
+
+  @@index([createdByUserId, status])
+  @@index([status, difficulty])
+  @@map("practice_problems")
+}
+
+model PracticeTag {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  problems PracticeProblemTag[]
+
+  @@map("practice_tags")
+}
+
+model PracticeProblemTag {
+  problemId String @db.Uuid
+  tagId     String @db.Uuid
+
+  problem PracticeProblem @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  tag     PracticeTag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([problemId, tagId])
+  @@map("practice_problem_tags")
+}
+
+model PracticeProblemTestCase {
+  id                String             @id @default(uuid()) @db.Uuid
+  practiceProblemId String             @db.Uuid
+  name              String
+  visibility        TestCaseVisibility
+  input             String
+  expectedOutput    String
+  weight            Decimal            @db.Decimal(8, 2)
+  position          Int
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  problem PracticeProblem @relation(fields: [practiceProblemId], references: [id], onDelete: Cascade)
+
+  @@unique([practiceProblemId, position])
+  @@index([practiceProblemId, visibility])
+  @@map("practice_problem_test_cases")
+}
+
+model PracticeProgress {
+  id                String                 @id @default(uuid()) @db.Uuid
+  studentId         String                 @db.Uuid
+  practiceProblemId String                 @db.Uuid
+  status            PracticeProgressStatus @default(NOT_STARTED)
+  attemptCount      Int                    @default(0)
+  bestScore         Decimal?               @db.Decimal(5, 2)
+  firstAttemptedAt  DateTime?
+  lastAttemptedAt   DateTime?
+  solvedAt          DateTime?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  student User            @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  problem PracticeProblem @relation(fields: [practiceProblemId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, practiceProblemId])
+  @@index([studentId, status])
+  @@index([practiceProblemId])
+  @@map("practice_progress")
+}
+
+model JudgeResult {
+  id              String   @id @default(uuid()) @db.Uuid
+  submissionId    String   @unique @db.Uuid
+  totalScore      Decimal  @db.Decimal(5, 2)
+  maxScore        Decimal  @db.Decimal(5, 2)
+  passed          Boolean
+  totalTests      Int
+  passedTests     Int
+  durationMs      Int
+  peakMemoryBytes BigInt?
+  createdAt       DateTime @default(now())
+
+  submission JudgeSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  testResults TestCaseResult[]
+
+  @@map("judge_results")
+}
+
+model TestCaseResult {
+  id              String               @id @default(uuid()) @db.Uuid
+  judgeResultId   String               @db.Uuid
+  testCaseId      String?              @db.Uuid
+  displayName     String
+  visibility      TestCaseVisibility
+  status          TestCaseResultStatus
+  scoreEarned     Decimal              @db.Decimal(8, 2)
+  actualOutput    String?
+  stderr          String?
+  durationMs      Int
+  memoryBytes     BigInt?
+  createdAt       DateTime             @default(now())
+
+  judgeResult JudgeResult @relation(fields: [judgeResultId], references: [id], onDelete: Cascade)
+  testCase    TestCase?    @relation(fields: [testCaseId], references: [id], onDelete: SetNull)
+
+  @@unique([judgeResultId, testCaseId])
+  @@index([judgeResultId])
+  @@index([testCaseId])
+  @@map("test_case_results")
+}
+
+model ProjectCheckpointConfig {
+  id                   String             @id @default(uuid()) @db.Uuid
+  checkpointId          String             @unique @db.Uuid
+  repositoryProvider    RepositoryProvider @default(GITHUB)
+  defaultBranch         String?
+  requireDeploymentUrl  Boolean            @default(false)
+  maxRepositoryBytes    BigInt
+  maxBuildTimeMs        Int
+  maxTestTimeMs         Int
+  passScore             Decimal            @default(70) @db.Decimal(5, 2)
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  checkpoint  VideoCheckpoint          @relation(fields: [checkpointId], references: [id], onDelete: Cascade)
+  criteria    ProjectRubricCriterion[]
+  submissions ProjectSubmission[]
+
+  @@map("project_checkpoint_configs")
+}
+
+model ProjectRubricCriterion {
+  id                        String                @id @default(uuid()) @db.Uuid
+  projectCheckpointConfigId String                @db.Uuid
+  title                     String
+  description               String?
+  type                      ProjectCriterionType
+  autoCheckType             ProjectAutoCheckType?
+  configJson                Json?
+  weight                    Decimal               @db.Decimal(8, 2)
+  required                  Boolean               @default(false)
+  position                  Int
+  createdAt                 DateTime              @default(now())
+  updatedAt                 DateTime              @updatedAt
+
+  projectConfig ProjectCheckpointConfig @relation(fields: [projectCheckpointConfigId], references: [id], onDelete: Cascade)
+  results       ProjectRubricResult[]
+
+  @@unique([projectCheckpointConfigId, position])
+  @@index([projectCheckpointConfigId, type])
+  @@map("project_rubric_criteria")
+}
+
+model ProjectSubmission {
+  id                        String                  @id @default(uuid()) @db.Uuid
+  userId                    String                  @db.Uuid
+  checkpointId              String                  @db.Uuid
+  projectCheckpointConfigId String                  @db.Uuid
+  repositoryUrl             String
+  repositoryProvider        RepositoryProvider
+  repositoryOwner           String
+  repositoryName            String
+  branch                    String?
+  commitSha                 String
+  deploymentUrl             String?
+  status                    ProjectSubmissionStatus @default(QUEUED)
+  jobId                     String                  @unique
+  idempotencyKey            String                  @unique
+  correlationId             String
+  gradingConfigSnapshotJson Json
+  score                     Decimal?                @db.Decimal(5, 2)
+  passed                    Boolean?
+  submittedAt               DateTime                @default(now())
+  startedAt                 DateTime?
+  completedAt               DateTime?
+  failedAt                  DateTime?
+  createdAt                 DateTime                @default(now())
+  updatedAt                 DateTime                @updatedAt
+
+  user          User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  checkpoint    VideoCheckpoint         @relation(fields: [checkpointId], references: [id], onDelete: Cascade)
+  projectConfig ProjectCheckpointConfig @relation(fields: [projectCheckpointConfigId], references: [id], onDelete: Restrict)
+  grade         ProjectGrade?
+
+  @@index([userId, submittedAt])
+  @@index([checkpointId, submittedAt])
+  @@index([status])
+  @@index([correlationId])
+  @@map("project_submissions")
+}
+
+model ProjectGrade {
+  id          String   @id @default(uuid()) @db.Uuid
+  submissionId String  @unique @db.Uuid
+  score       Decimal  @db.Decimal(5, 2)
+  passed      Boolean
+  autoScore   Decimal  @db.Decimal(5, 2)
+  manualScore Decimal? @db.Decimal(5, 2)
+  summary     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  submission ProjectSubmission     @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  results    ProjectRubricResult[]
+
+  @@map("project_grades")
+}
+
+model ProjectRubricResult {
+  id             String                    @id @default(uuid()) @db.Uuid
+  projectGradeId String                    @db.Uuid
+  criterionId    String?                   @db.Uuid
+  displayTitle   String
+  status         ProjectRubricResultStatus
+  scoreEarned    Decimal                   @db.Decimal(8, 2)
+  maxScore       Decimal                   @db.Decimal(8, 2)
+  feedback       String?
+  detailsJson    Json?
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+
+  grade     ProjectGrade             @relation(fields: [projectGradeId], references: [id], onDelete: Cascade)
+  criterion ProjectRubricCriterion?   @relation(fields: [criterionId], references: [id], onDelete: SetNull)
+
+  @@unique([projectGradeId, criterionId])
+  @@index([projectGradeId])
+  @@index([criterionId])
+  @@map("project_rubric_results")
+}
+
+model VideoProcessingJob {
+  id               String                   @id @default(uuid()) @db.Uuid
+  videoAssetId     String                   @db.Uuid
+  jobId            String                   @unique
+  status           VideoProcessingJobStatus @default(QUEUED)
+  attemptCount     Int                      @default(0)
+  progressPercent  Int                      @default(0)
+  startedAt        DateTime?
+  completedAt      DateTime?
+  failedAt         DateTime?
+  lastErrorCode    String?
+  lastErrorMessage String?
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+
+  videoAsset VideoAsset @relation(fields: [videoAssetId], references: [id], onDelete: Cascade)
+
+  @@index([videoAssetId])
+  @@index([status])
+  @@map("video_processing_jobs")
+}
+
+model VideoRendition {
+  id                String                @id @default(uuid()) @db.Uuid
+  videoAssetId      String                @db.Uuid
+  quality           String
+  width             Int
+  height            Int
+  bitrate           Int
+  playlistObjectKey String
+  createdAt         DateTime              @default(now())
+
+  videoAsset VideoAsset @relation(fields: [videoAssetId], references: [id], onDelete: Cascade)
+
+  @@unique([videoAssetId, quality])
+  @@index([videoAssetId])
+  @@map("video_renditions")
+}
+
+model VideoProcessingFailure {
+  id               String   @id @default(uuid()) @db.Uuid
+  videoAssetId     String   @db.Uuid
+  jobId            String
+  errorCode        String
+  errorMessage     String
+  retryable        Boolean
+  attemptCount     Int
+  createdAt        DateTime @default(now())
+
+  videoAsset VideoAsset @relation(fields: [videoAssetId], references: [id], onDelete: Cascade)
+
+  @@index([videoAssetId])
+  @@index([jobId])
+  @@unique([jobId, errorCode])
+  @@map("video_processing_failures")
+}
+
+model AdminAuditLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  adminUserId  String   @db.Uuid
+  action       String
+  targetType   String
+  targetId     String
+  metadataJson Json?
+  createdAt    DateTime @default(now())
+
+  adminUser User @relation("AdminAuditActor", fields: [adminUserId], references: [id], onDelete: Restrict)
+
+  @@index([adminUserId, createdAt])
+  @@index([action, createdAt])
+  @@index([targetType, targetId])
+  @@map("admin_audit_logs")
+}
+
+model Notification {
+  id         String               @id @default(uuid()) @db.Uuid
+  userId     String               @db.Uuid
+  type       NotificationType
+  category   NotificationCategory
+  title      String
+  message    String
+  dataJson   Json?
+  actionUrl  String?
+  dedupeKey  String?              @unique
+  readAt     DateTime?
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+  @@index([userId, category, createdAt])
+  @@index([category])
+  @@map("notifications")
+}
+
+model NotificationPreference {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @unique @db.Uuid
+  learningEnabled Boolean  @default(true)
+  practiceEnabled Boolean  @default(true)
+  projectEnabled  Boolean  @default(true)
+  courseEnabled   Boolean  @default(true)
+  systemEnabled   Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_preferences")
+}

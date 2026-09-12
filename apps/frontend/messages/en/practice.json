@@ -1,0 +1,21 @@
+{
+  "title": "Practice Center",
+  "description": "Standalone coding problems independent of courses.",
+  "openWorkspace": "Open Workspace",
+  "problem": "Problem",
+  "code": "Code",
+  "result": "Result",
+  "submissions": "Submissions",
+  "publicTests": "Public Tests",
+  "bestScore": "Best Score",
+  "published": "Published",
+  "attempted": "Attempted",
+  "solved": "Solved",
+  "difficulty": "Difficulty",
+  "tags": "Tags",
+  "empty": "No practice problems match your filters.",
+  "noProblems": "No practice problems match your filters.",
+  "runOutput": "Run Output",
+  "judgeResult": "Judge Result",
+  "submissionHistory": "Submission History"
+}

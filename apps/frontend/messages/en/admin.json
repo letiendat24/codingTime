@@ -1,0 +1,13 @@
+{
+  "dashboard": "Platform Dashboard",
+  "users": "Users",
+  "instructors": "Instructors",
+  "courses": "Courses",
+  "enrollments": "Enrollments",
+  "operations": "Operations",
+  "auditLogs": "Audit Logs",
+  "platformHealth": "Platform Health",
+  "recentActivity": "Recent Activity",
+  "userManagement": "User Management",
+  "adminRequired": "Admin access required."
+}
