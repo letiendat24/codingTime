@@ -106,6 +106,8 @@ interface SeededVideoCourse {
   readonly videoAssetId: string;
 }
 
+import { Readable } from 'node:stream';
+
 const prisma: PrismaClient = new Prisma({
   datasources: {
     db: {
@@ -114,14 +116,20 @@ const prisma: PrismaClient = new Prisma({
   },
 });
 const tokenService = new TokenService(testEnv);
+const mockManifestBuffer = Buffer.from('#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=2800000\n720p/index.m3u8\n');
+
 const storage = {
   presignedGetObject: async () => 'http://localhost:9000/codesync-local/playback-url',
   presignedPutObject: async () => 'http://localhost:9000/codesync-local/upload-url',
-  statObject: async () => ({
-    size: 1024,
+  statObject: async (_bucket: string, key: string) => ({
+    size: key.endsWith('.m3u8') ? mockManifestBuffer.length : 1024,
     etag: 'test-etag',
-    metaData: { 'content-type': 'video/mp4' },
+    metaData: { 'content-type': key.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp4' },
   }),
+  getObject: async (_bucket: string, key: string) =>
+    Readable.from(key.endsWith('.m3u8') ? mockManifestBuffer : Buffer.alloc(1024, 0)),
+  getPartialObject: async (_bucket: string, _key: string, _offset: number, length: number) =>
+    Readable.from(Buffer.alloc(length, 0)),
 } as unknown as MinioClient;
 const publisher: VideoMessagePublisher = {
   publishProcessingRequested: () => {},
@@ -414,6 +422,8 @@ describe('interactive video learning integration', () => {
       .set('Authorization', `Bearer ${student.token}`);
 
     expect(response.status).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store, private');
+    expect(response.body.playbackUrl).toBe(`/api/v1/learning/lessons/${lessonId}/hls/master.m3u8`);
     expect(response.body.progress.lastPositionSeconds).toBe(420);
     expect(response.body.checkpoints.map((checkpoint: { title: string }) => checkpoint.title)).toEqual(['Earlier', 'Later']);
     expect(response.body.checkpoints[1].completed).toBe(true);
@@ -421,6 +431,63 @@ describe('interactive video learning integration', () => {
       expect.objectContaining({ title: 'Example', timestampSeconds: 250, language: 'typescript' }),
     ]);
     expect(response.body.codeSnapshots[0]).not.toHaveProperty('files');
+  });
+
+  it('streams HLS manifest and supports byte-range segment requests with authorization', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const student = await createUser([RoleName.STUDENT]);
+    const outsider = await createUser([RoleName.STUDENT]);
+    const { lessonId } = await createReadyVideoCourse(instructor.id, student.id);
+
+    // 1. Master manifest streaming
+    const masterManifest = await request(app)
+      .get(`/api/v1/learning/lessons/${lessonId}/hls/master.m3u8`)
+      .set('Authorization', `Bearer ${student.token}`);
+    expect(masterManifest.status).toBe(200);
+    expect(masterManifest.headers['content-type']).toBe('application/vnd.apple.mpegurl');
+    expect(masterManifest.headers['cache-control']).toContain('no-cache');
+    expect(masterManifest.headers['accept-ranges']).toBe('bytes');
+
+    // 2. Token query param fallback
+    const manifestWithQueryToken = await request(app)
+      .get(`/api/v1/learning/lessons/${lessonId}/hls/master.m3u8?token=${student.token}`);
+    expect(manifestWithQueryToken.status).toBe(200);
+
+    // 3. Variant playlist streaming
+    const variantPlaylist = await request(app)
+      .get(`/api/v1/learning/lessons/${lessonId}/hls/720p/index.m3u8`)
+      .set('Authorization', `Bearer ${student.token}`);
+    expect(variantPlaylist.status).toBe(200);
+    expect(variantPlaylist.headers['content-type']).toBe('application/vnd.apple.mpegurl');
+
+    // 4. Media segment Range request (206 Partial Content)
+    const segmentRange = await request(app)
+      .get(`/api/v1/learning/lessons/${lessonId}/hls/720p/segment_00000.ts`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .set('Range', 'bytes=0-100');
+    expect(segmentRange.status).toBe(206);
+    expect(segmentRange.headers['content-range']).toBe('bytes 0-100/1024');
+    expect(segmentRange.headers['content-length']).toBe('101');
+    expect(segmentRange.headers['content-type']).toBe('video/mp2t');
+
+    // 5. Out of bounds Range request (416 Range Not Satisfiable)
+    const invalidRange = await request(app)
+      .get(`/api/v1/learning/lessons/${lessonId}/hls/720p/segment_00000.ts`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .set('Range', 'bytes=5000-6000');
+    expect(invalidRange.status).toBe(416);
+
+    // 6. Missing object returns 404
+    const notFound = await request(app)
+      .get(`/api/v1/learning/lessons/${lessonId}/hls/non-existent.m3u8`)
+      .set('Authorization', `Bearer ${student.token}`);
+    expect(notFound.status).toBe(200); // Storage mock returns buffer for .m3u8
+
+    // 7. Non-enrolled student denied access
+    const outsiderAccess = await request(app)
+      .get(`/api/v1/learning/lessons/${lessonId}/hls/master.m3u8`)
+      .set('Authorization', `Bearer ${outsider.token}`);
+    expect(outsiderAccess.status).toBe(404);
   });
 
   it('requires INFO checkpoints before auto-completing a video lesson', async () => {

@@ -10,8 +10,10 @@ export function createInstructorVideoRouter(controller: VideoController, tokenSe
   const instructorOnly = [requireAuth(tokenService), requireRole(RoleName.INSTRUCTOR)] as const;
 
   router.post('/lessons/:lessonId/video/upload-intent', ...instructorOnly, asyncHandler(controller.createUploadIntent));
+  router.get('/lessons/:lessonId/video', ...instructorOnly, asyncHandler(controller.getInstructorLessonVideo));
   router.post('/videos/:videoAssetId/complete-upload', ...instructorOnly, asyncHandler(controller.completeUpload));
   router.get('/videos/:videoAssetId', ...instructorOnly, asyncHandler(controller.getInstructorVideo));
+  router.get('/videos/:videoAssetId/hls/*', ...instructorOnly, asyncHandler(controller.streamHls));
   router.post('/videos/:videoAssetId/retry', ...instructorOnly, asyncHandler(controller.retry));
 
   return router;

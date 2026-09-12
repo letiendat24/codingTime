@@ -214,6 +214,16 @@ export class CourseRepository {
     });
   }
 
+  async unpublish(courseId: string) {
+    return this.prisma.course.update({
+      where: { id: courseId },
+      data: {
+        status: CourseStatus.DRAFT,
+      },
+      include: courseInclude,
+    });
+  }
+
   async archive(courseId: string) {
     return this.prisma.course.update({
       where: { id: courseId },

@@ -3,13 +3,27 @@ export interface NavigationItem {
   readonly label: string;
 }
 
+export function getRoleLandingPage(roles: readonly string[]): string {
+  const roleSet = new Set(roles);
+  if (roleSet.has('ADMIN')) {
+    return '/admin';
+  }
+  if (roleSet.has('INSTRUCTOR')) {
+    return '/instructor/courses';
+  }
+  if (roleSet.has('STUDENT')) {
+    return '/courses';
+  }
+  return '/courses';
+}
+
 export function navigationForRoles(roles: readonly string[]): readonly NavigationItem[] {
   const roleSet = new Set(roles);
   const items: NavigationItem[] = [];
 
   if (roleSet.has('STUDENT')) {
     items.push(
-      { href: '/dashboard', label: 'Dashboard' },
+      { href: '/courses', label: 'Courses' },
       { href: '/my-courses', label: 'My Courses' },
       { href: '/practice', label: 'Practice' },
       { href: '/learning-history', label: 'Learning History' },

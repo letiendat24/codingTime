@@ -36,6 +36,7 @@ export interface VideoStatusResponse {
     readonly lastErrorCode: string | null;
     readonly lastErrorMessage: string | null;
   } | null;
+  readonly playbackUrl?: string | null;
 }
 
 export interface VideoPlaybackResponse {

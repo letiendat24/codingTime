@@ -12,6 +12,7 @@
     "prisma:generate": "if [ -f ../../.env ]; then set -a; . ../../.env; set +a; fi; prisma generate --schema prisma/schema.prisma",
     "db:migrate": "if [ -f ../../.env ]; then set -a; . ../../.env; set +a; fi; prisma migrate deploy --schema prisma/schema.prisma",
     "db:seed": "tsx prisma/seed.ts",
+    "seed:demo": "node --import tsx prisma/demo-seed.ts",
     "typecheck": "pnpm prisma:generate && tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

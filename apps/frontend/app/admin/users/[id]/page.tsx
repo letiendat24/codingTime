@@ -3,22 +3,35 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
+import { ArrowLeft, ShieldCheck, UserX, UserCheck, Save, History } from 'lucide-react';
+import Link from 'next/link';
 import { type AdminUserDetail, requestJson } from '../../../../lib/api';
 import { AdminError, StatusBadge, formatDate } from '../../admin-components';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../../../design-system/components/card';
+import { Button } from '../../../../design-system/components/button';
+import { Input } from '../../../../design-system/components/input';
+import { Badge } from '../../../../design-system/components/badge';
+import { LoadingState } from '../../../../design-system/components/loading-state';
 
 export default function AdminUserDetailPage() {
   const params = useParams<{ id: string }>();
   const queryClient = useQueryClient();
   const [rolesText, setRolesText] = useState('');
+  const [isRolesInitialized, setIsRolesInitialized] = useState(false);
+
   const user = useQuery({
     queryKey: ['admin-user', params.id],
     queryFn: async () => {
       const body = await requestJson<{ user: AdminUserDetail }>(`/admin/users/${params.id}`);
-      setRolesText(body.user.roles.join(','));
+      if (!isRolesInitialized) {
+        setRolesText(body.user.roles.join(', '));
+        setIsRolesInitialized(true);
+      }
       return body.user;
     },
     retry: false,
   });
+
   const statusMutation = useMutation({
     mutationFn: (status: string) =>
       requestJson(`/admin/users/${params.id}/status`, {
@@ -27,6 +40,7 @@ export default function AdminUserDetailPage() {
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-user', params.id] }),
   });
+
   const roleMutation = useMutation({
     mutationFn: () =>
       requestJson(`/admin/users/${params.id}/roles`, {
@@ -39,52 +53,162 @@ export default function AdminUserDetailPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-user', params.id] }),
   });
 
-  if (user.isError) return <AdminError />;
+  if (user.isError) return <AdminError message={user.error instanceof Error ? user.error.message : undefined} />;
+  if (user.isLoading) {
+    return (
+      <div className="py-16">
+        <LoadingState message="Loading user details..." />
+      </div>
+    );
+  }
+
   const detail = user.data;
 
   return (
-    <section className="space-y-6">
-      <h2 className="text-xl font-semibold">User Detail</h2>
-      <div className="rounded-md border p-4">
-        <p className="text-lg font-medium">{detail?.displayName}</p>
-        <p className="text-sm text-muted-foreground">{detail?.email}</p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {(detail?.roles ?? []).map((role) => <StatusBadge key={role} value={role} />)}
-          {detail ? <StatusBadge value={detail.status} /> : null}
-        </div>
-        <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
-          <div><dt className="text-muted-foreground">Sessions</dt><dd>{detail?.activeSessionCount ?? 0}</dd></div>
-          <div><dt className="text-muted-foreground">Enrollments</dt><dd>{detail?.enrollmentCount ?? 0}</dd></div>
-          <div><dt className="text-muted-foreground">Owned courses</dt><dd>{detail?.ownedCourseCount ?? 0}</dd></div>
-        </dl>
-      </div>
+    <div className="space-y-6">
+      <Link
+        href="/admin/users"
+        className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Back to Users
+      </Link>
 
-      <div className="rounded-md border p-4">
-        <h3 className="font-semibold">Actions</h3>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button className="rounded-md border px-3 py-2 text-sm" onClick={() => statusMutation.mutate('SUSPENDED')}>
-            Suspend
-          </button>
-          <button className="rounded-md border px-3 py-2 text-sm" onClick={() => statusMutation.mutate('ACTIVE')}>
-            Activate
-          </button>
-          <input className="rounded-md border bg-background px-3 py-2 text-sm" value={rolesText} onChange={(event) => setRolesText(event.target.value)} />
-          <button className="rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground" onClick={() => roleMutation.mutate()}>
-            Save Roles
-          </button>
-        </div>
-      </div>
-
-      <div>
-        <h3 className="font-semibold">Recent Activity</h3>
-        <div className="mt-3 space-y-2">
-          {(detail?.recentActivity ?? []).map((activity) => (
-            <div key={activity.id} className="rounded-md border p-3 text-sm">
-              {activity.type.replaceAll('_', ' ')} · {activity.courseTitle ?? activity.lessonTitle ?? '-'} · {formatDate(activity.createdAt)}
+      <div className="grid gap-6 lg:grid-cols-3">
+        {/* User Identity Card */}
+        <Card className="lg:col-span-1">
+          <CardHeader>
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary font-bold text-lg">
+                {detail?.displayName?.charAt(0) ?? 'U'}
+              </div>
+              <div>
+                <CardTitle className="text-lg">{detail?.displayName}</CardTitle>
+                <CardDescription>{detail?.email}</CardDescription>
+              </div>
             </div>
-          ))}
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm">
+            <div className="flex items-center justify-between border-b pb-2">
+              <span className="text-muted-foreground">Account Status</span>
+              {detail ? <StatusBadge value={detail.status} /> : null}
+            </div>
+            <div className="flex items-center justify-between border-b pb-2">
+              <span className="text-muted-foreground">Assigned Roles</span>
+              <div className="flex flex-wrap gap-1">
+                {(detail?.roles ?? []).map((role) => (
+                  <Badge key={role} variant="outline" className="text-xs">
+                    {role}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center justify-between border-b pb-2">
+              <span className="text-muted-foreground">Active Sessions</span>
+              <span className="font-semibold">{detail?.activeSessionCount ?? 0}</span>
+            </div>
+            <div className="flex items-center justify-between border-b pb-2">
+              <span className="text-muted-foreground">Course Enrollments</span>
+              <span className="font-semibold">{detail?.enrollmentCount ?? 0}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Owned Courses</span>
+              <span className="font-semibold">{detail?.ownedCourseCount ?? 0}</span>
+            </div>
+
+            <div className="pt-4 border-t space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase">Account Actions</p>
+              <div className="flex gap-2">
+                {detail?.status === 'ACTIVE' ? (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => statusMutation.mutate('SUSPENDED')}
+                    isLoading={statusMutation.isPending}
+                    leftIcon={<UserX className="h-4 w-4" />}
+                  >
+                    Suspend Account
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => statusMutation.mutate('ACTIVE')}
+                    isLoading={statusMutation.isPending}
+                    leftIcon={<UserCheck className="h-4 w-4" />}
+                  >
+                    Activate Account
+                  </Button>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Roles & Activity Management */}
+        <div className="space-y-6 lg:col-span-2">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="h-5 w-5 text-primary" />
+                <CardTitle>Role Permissions</CardTitle>
+              </div>
+              <CardDescription>
+                Assign or revoke roles (STUDENT, INSTRUCTOR, ADMIN) separated by commas.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex gap-3">
+                <Input
+                  className="flex-1"
+                  value={rolesText}
+                  onChange={(event) => setRolesText(event.target.value)}
+                  placeholder="e.g. STUDENT, INSTRUCTOR, ADMIN"
+                />
+                <Button
+                  onClick={() => roleMutation.mutate()}
+                  isLoading={roleMutation.isPending}
+                  leftIcon={<Save className="h-4 w-4" />}
+                >
+                  Save Roles
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <History className="h-5 w-5 text-primary" />
+                <CardTitle>User Activity History</CardTitle>
+              </div>
+              <CardDescription>Recent learning and system actions performed by this user</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {(detail?.recentActivity ?? []).map((activity) => (
+                  <div key={activity.id} className="flex items-center justify-between rounded-lg border bg-card p-3 text-sm">
+                    <div className="space-y-1">
+                      <span className="font-mono text-xs font-semibold uppercase text-primary">
+                        {activity.type.replaceAll('_', ' ')}
+                      </span>
+                      <p className="text-xs text-muted-foreground">
+                        {activity.courseTitle ?? activity.lessonTitle ?? 'System action'}
+                      </p>
+                    </div>
+                    <span className="text-xs text-muted-foreground">{formatDate(activity.createdAt)}</span>
+                  </div>
+                ))}
+                {(!detail?.recentActivity || detail.recentActivity.length === 0) && (
+                  <p className="text-center text-sm text-muted-foreground py-6">No recent activity recorded.</p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
         </div>
       </div>
-    </section>
+    </div>
   );
 }

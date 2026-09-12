@@ -277,6 +277,20 @@ export class CourseService {
     return mapInstructorDetail(await this.courses.publish(courseId));
   }
 
+  async unpublishCourse(instructorId: string, courseId: string) {
+    const course = requireOwnedCourse(await this.courses.findById(courseId), instructorId);
+
+    if (course.status === CourseStatus.ARCHIVED) {
+      throw courseAlreadyArchived();
+    }
+
+    if (course.status === CourseStatus.DRAFT) {
+      return mapInstructorDetail(course);
+    }
+
+    return mapInstructorDetail(await this.courses.unpublish(courseId));
+  }
+
   async archiveCourse(instructorId: string, courseId: string) {
     const course = requireOwnedCourse(await this.courses.findById(courseId), instructorId);
 

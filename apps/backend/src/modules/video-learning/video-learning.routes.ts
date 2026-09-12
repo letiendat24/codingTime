@@ -10,6 +10,7 @@ export function createStudentVideoLearningRouter(controller: VideoLearningContro
   const studentOnly = [requireAuth(tokenService), requireRole(RoleName.STUDENT)] as const;
 
   router.get('/lessons/:lessonId/video', ...studentOnly, asyncHandler(controller.playback));
+  router.get('/lessons/:lessonId/hls/*', ...studentOnly, asyncHandler(controller.streamHls));
   router.get('/lessons/:lessonId/code-along', ...studentOnly, asyncHandler(controller.getCodeAlong));
   router.put('/videos/:videoAssetId/progress', ...studentOnly, asyncHandler(controller.updateProgress));
   router.post('/checkpoints/:checkpointId/complete', ...studentOnly, asyncHandler(controller.completeCheckpoint));

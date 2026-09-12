@@ -32,7 +32,18 @@ export class VideoController {
   getInstructorVideo = async (request: Request, response: Response) => {
     const auth = requireRequestAuth(request);
     const params = videoAssetIdParamSchema.parse(request.params);
+    response.setHeader('Cache-Control', 'no-store, private');
+    response.setHeader('Pragma', 'no-cache');
     response.status(200).json({ video: await this.videos.getInstructorVideo(auth.userId, params.videoAssetId) });
+  };
+
+  getInstructorLessonVideo = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    const params = lessonIdParamSchema.parse(request.params);
+    response.setHeader('Cache-Control', 'no-store, private');
+    response.setHeader('Pragma', 'no-cache');
+    const video = await this.videos.getInstructorLessonVideo(auth.userId, params.lessonId);
+    response.status(200).json({ video });
   };
 
   retry = async (request: Request, response: Response) => {
@@ -44,6 +55,15 @@ export class VideoController {
   playback = async (request: Request, response: Response) => {
     const auth = requireRequestAuth(request);
     const params = lessonIdParamSchema.parse(request.params);
+    response.setHeader('Cache-Control', 'no-store, private');
+    response.setHeader('Pragma', 'no-cache');
     response.status(200).json(await this.videos.getPlayback(auth.userId, params.lessonId));
+  };
+
+  streamHls = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    const params = videoAssetIdParamSchema.parse(request.params);
+    const rawPath = request.params[0] ?? (request.params as Record<string, string>).file ?? '';
+    await this.videos.streamInstructorHls(auth.userId, params.videoAssetId, rawPath, request, response);
   };
 }

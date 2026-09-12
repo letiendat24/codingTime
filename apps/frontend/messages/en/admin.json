@@ -9,5 +9,15 @@
   "platformHealth": "Platform Health",
   "recentActivity": "Recent Activity",
   "userManagement": "User Management",
-  "adminRequired": "Admin access required."
+  "adminRequired": "Admin access required.",
+  "totalUsers": "Total Users",
+  "totalCourses": "Total Courses",
+  "totalEnrollments": "Total Enrollments",
+  "operationalJobs": "Operational Jobs",
+  "suspend": "Suspend",
+  "activate": "Activate",
+  "manageRoles": "Manage Roles",
+  "userStatus": "User Status",
+  "role": "Role",
+  "allRoles": "All Roles"
 }

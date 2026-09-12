@@ -78,6 +78,12 @@ export class CourseController {
     response.status(200).json({ course: await this.courses.publishCourse(auth.userId, params.courseId) });
   };
 
+  unpublishCourse = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    const params = uuidParamSchema.parse(request.params);
+    response.status(200).json({ course: await this.courses.unpublishCourse(auth.userId, params.courseId) });
+  };
+
   archiveCourse = async (request: Request, response: Response) => {
     const auth = requireRequestAuth(request);
     const params = uuidParamSchema.parse(request.params);

@@ -89,6 +89,7 @@ interface TestUser {
 interface CourseBody {
   readonly course: {
     readonly id: string;
+    readonly title?: string;
     readonly slug: string;
     readonly status: CourseStatus;
     readonly ownerInstructorId?: string;
@@ -419,5 +420,47 @@ describe('course management integration', () => {
     expect(modules.map((module) => module.position)).toEqual([1, 2, 3]);
     expect(modules[0]?.lessons.map((lesson) => lesson.id)).toEqual([lessonTwo.id, lessonOne.id]);
     expect(modules[0]?.lessons.map((lesson) => lesson.position)).toEqual([1, 2]);
+  });
+
+  it('supports unpublishing a published course back to draft for editing', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const courseId = await createPublishableCourse(instructor);
+
+    // 1. Publish course
+    const published = await request(app)
+      .post(`/api/v1/instructor/courses/${courseId}/publish`)
+      .set('Authorization', `Bearer ${instructor.token}`);
+    expect(published.status).toBe(200);
+    expect((published.body as CourseBody).course.status).toBe(CourseStatus.PUBLISHED);
+
+    // 2. Editing while published is rejected
+    const blockedEdit = await request(app)
+      .patch(`/api/v1/instructor/courses/${courseId}`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({ title: 'Illegal Edit While Published' });
+    expect(blockedEdit.status).toBe(409);
+    expect(blockedEdit.body.error.code).toBe('COURSE_NOT_EDITABLE');
+
+    // 3. Move back to draft via unpublish
+    const unpublished = await request(app)
+      .post(`/api/v1/instructor/courses/${courseId}/unpublish`)
+      .set('Authorization', `Bearer ${instructor.token}`);
+    expect(unpublished.status).toBe(200);
+    expect((unpublished.body as CourseBody).course.status).toBe(CourseStatus.DRAFT);
+
+    // 4. Editing is now allowed
+    const allowedEdit = await request(app)
+      .patch(`/api/v1/instructor/courses/${courseId}`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({ title: 'Updated After Unpublishing' });
+    expect(allowedEdit.status).toBe(200);
+    expect((allowedEdit.body as CourseBody).course.title).toBe('Updated After Unpublishing');
+
+    // 5. Can be published again
+    const republished = await request(app)
+      .post(`/api/v1/instructor/courses/${courseId}/publish`)
+      .set('Authorization', `Bearer ${instructor.token}`);
+    expect(republished.status).toBe(200);
+    expect((republished.body as CourseBody).course.status).toBe(CourseStatus.PUBLISHED);
   });
 });

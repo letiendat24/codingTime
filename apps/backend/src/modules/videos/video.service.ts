@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { Request, Response } from 'express';
 import type { Client as MinioClient } from 'minio';
 import {
   LessonType,
@@ -8,7 +9,8 @@ import {
 import type { AsyncMessage, VideoProcessingRequestedPayload } from '@codesync/shared';
 import type { Env } from '../../config';
 import type { AppLogger } from '../../shared/logger';
-import { sourceObjectKey } from './video.constants';
+import { processedPrefix, sourceObjectKey } from './video.constants';
+import { sanitizeHlsPath, streamHlsObject } from './video-stream.helper';
 import {
   videoAccessDenied,
   videoLessonNotFound,
@@ -38,7 +40,7 @@ function isTerminalOrActiveStatus(status: VideoAssetStatus) {
     status === VideoAssetStatus.READY;
 }
 
-function mapVideo(video: VideoAssetWithDetails): VideoStatusResponse {
+function mapVideo(video: VideoAssetWithDetails, playbackUrl?: string | null): VideoStatusResponse {
   const latestJob = video.jobs[0];
 
   return {
@@ -72,6 +74,7 @@ function mapVideo(video: VideoAssetWithDetails): VideoStatusResponse {
           lastErrorMessage: latestJob.lastErrorMessage,
         }
       : null,
+    ...(playbackUrl !== undefined ? { playbackUrl } : {}),
   };
 }
 
@@ -205,7 +208,50 @@ export class VideoService {
       throw videoAccessDenied();
     }
 
-    return mapVideo(video);
+    let playbackUrl: string | null = null;
+    if (video.status === VideoAssetStatus.READY && video.masterPlaylistObjectKey) {
+      playbackUrl = `/api/v1/instructor/videos/${video.id}/hls/master.m3u8`;
+    }
+
+    return mapVideo(video, playbackUrl);
+  }
+
+  async getInstructorLessonVideo(instructorId: string, lessonId: string): Promise<VideoStatusResponse | null> {
+    const video = await this.videos.findVideoByLesson(lessonId);
+
+    if (!video) {
+      return null;
+    }
+
+    if (video.lesson.module.course.ownerInstructorId !== instructorId) {
+      throw videoAccessDenied();
+    }
+
+    let playbackUrl: string | null = null;
+    if (video.status === VideoAssetStatus.READY && video.masterPlaylistObjectKey) {
+      playbackUrl = `/api/v1/instructor/videos/${video.id}/hls/master.m3u8`;
+    }
+
+    return mapVideo(video, playbackUrl);
+  }
+
+  async streamInstructorHls(
+    instructorId: string,
+    videoAssetId: string,
+    rawFilePath: string,
+    request: Request,
+    response: Response,
+  ): Promise<void> {
+    const video = await this.videos.findVideoForInstructor(videoAssetId, instructorId);
+
+    if (!video || video.status !== VideoAssetStatus.READY || !video.masterPlaylistObjectKey) {
+      throw videoAccessDenied();
+    }
+
+    const filePath = sanitizeHlsPath(rawFilePath);
+    const objectKey = `${processedPrefix(video.id)}/${filePath}`;
+
+    await streamHlsObject(this.storage, this.env.MINIO_BUCKET, objectKey, filePath, request, response);
   }
 
   async retry(instructorId: string, videoAssetId: string, correlationId: string): Promise<VideoStatusResponse> {
@@ -303,11 +349,7 @@ export class VideoService {
     return {
       videoAssetId: video.id,
       status: 'READY',
-      playbackUrl: await this.storage.presignedGetObject(
-        this.env.MINIO_BUCKET,
-        video.masterPlaylistObjectKey,
-        this.env.VIDEO_PLAYBACK_URL_TTL_SECONDS,
-      ),
+      playbackUrl: `/api/v1/learning/lessons/${lessonId}/hls/master.m3u8`,
       durationSeconds: video.durationSeconds,
     };
   }

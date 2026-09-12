@@ -28,7 +28,16 @@ export class VideoLearningController {
   playback = async (request: Request, response: Response) => {
     const auth = requireRequestAuth(request);
     const params = lessonIdParamSchema.parse(request.params);
+    response.setHeader('Cache-Control', 'no-store, private');
+    response.setHeader('Pragma', 'no-cache');
     response.status(200).json(await this.videoLearning.getPlayback(auth.userId, params.lessonId));
+  };
+
+  streamHls = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    const params = lessonIdParamSchema.parse(request.params);
+    const rawPath = request.params[0] ?? (request.params as Record<string, string>).file ?? '';
+    await this.videoLearning.streamHls(auth.userId, params.lessonId, rawPath, request, response);
   };
 
   getCodeAlong = async (request: Request, response: Response) => {

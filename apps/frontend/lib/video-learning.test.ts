@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   compareCodeFiles,
   findBlockedSeekCheckpoint,
+  findPreviousSnapshot,
   findTriggeredCheckpoint,
+  formatTime,
+  parseTimeString,
+  resolvePlaybackUrl,
   selectNextSnapshot,
   selectSnapshotAtOrBefore,
   shouldSaveVideoProgress,
@@ -104,5 +108,44 @@ describe('video learning helpers', () => {
   it('throttles progress saves by configured interval', () => {
     expect(shouldSaveVideoProgress(1000, 10_999, 10)).toBe(false);
     expect(shouldSaveVideoProgress(1000, 11_000, 10)).toBe(true);
+  });
+
+  it('formats time to mm:ss or hh:mm:ss accurately', () => {
+    expect(formatTime(0)).toBe('00:00');
+    expect(formatTime(45)).toBe('00:45');
+    expect(formatTime(125)).toBe('02:05');
+    expect(formatTime(3600)).toBe('01:00:00');
+    expect(formatTime(3665)).toBe('01:01:05');
+  });
+
+  it('parses time strings from mm:ss, hh:mm:ss, or raw seconds', () => {
+    expect(parseTimeString('')).toBe(0);
+    expect(parseTimeString('45')).toBe(45);
+    expect(parseTimeString('02:05')).toBe(125);
+    expect(parseTimeString('2:5')).toBe(125);
+    expect(parseTimeString('01:01:05')).toBe(3665);
+    expect(parseTimeString('invalid')).toBe(0);
+    expect(parseTimeString('-10')).toBe(0);
+  });
+
+  it('finds the previous snapshot immediately at or before target time', () => {
+    const snapshots = [
+      { id: 's1', timestampSeconds: 30 },
+      { id: 's2', timestampSeconds: 90 },
+      { id: 's3', timestampSeconds: 180 },
+    ];
+
+    expect(findPreviousSnapshot(20, snapshots)).toBeUndefined();
+    expect(findPreviousSnapshot(30, snapshots)?.id).toBe('s1');
+    expect(findPreviousSnapshot(100, snapshots)?.id).toBe('s2');
+    expect(findPreviousSnapshot(180, snapshots)?.id).toBe('s3');
+    expect(findPreviousSnapshot(300, snapshots)?.id).toBe('s3');
+  });
+
+  it('resolves playback URLs correctly for absolute, relative, and tokenized formats', () => {
+    expect(resolvePlaybackUrl('')).toBe('');
+    expect(resolvePlaybackUrl('https://example.com/stream.m3u8')).toBe('https://example.com/stream.m3u8');
+    expect(resolvePlaybackUrl('https://example.com/stream.m3u8', 'tok123')).toBe('https://example.com/stream.m3u8?token=tok123');
+    expect(resolvePlaybackUrl('/api/v1/learning/lessons/123/hls/master.m3u8')).toContain('/api/v1/learning/lessons/123/hls/master.m3u8');
   });
 });

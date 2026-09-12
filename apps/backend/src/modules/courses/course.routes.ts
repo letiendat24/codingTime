@@ -25,6 +25,7 @@ export function createInstructorCourseRouter(controller: CourseController, token
   router.get('/courses/:courseId', ...instructorOnly, asyncHandler(controller.getInstructorCourse));
   router.patch('/courses/:courseId', ...instructorOnly, asyncHandler(controller.updateCourse));
   router.post('/courses/:courseId/publish', ...instructorOnly, asyncHandler(controller.publishCourse));
+  router.post('/courses/:courseId/unpublish', ...instructorOnly, asyncHandler(controller.unpublishCourse));
   router.post('/courses/:courseId/archive', ...instructorOnly, asyncHandler(controller.archiveCourse));
   router.post('/courses/:courseId/modules', ...instructorOnly, asyncHandler(controller.createModule));
   router.post('/courses/:courseId/modules/reorder', ...instructorOnly, asyncHandler(controller.reorderModules));

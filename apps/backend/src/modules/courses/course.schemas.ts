@@ -68,13 +68,13 @@ export const reorderModulesSchema = z.object({
 
 export const createLessonSchema = z.object({
   title: z.string().trim().min(1).max(160),
-  description: z.string().trim().min(1).max(2_000).optional(),
+  description: z.string().trim().min(1).max(100_000).optional(),
   lessonType: z.nativeEnum(LessonType),
 });
 
 export const updateLessonSchema = z.object({
   title: z.string().trim().min(1).max(160).optional(),
-  description: z.string().trim().min(1).max(2_000).nullable().optional(),
+  description: z.string().trim().min(1).max(100_000).nullable().optional(),
   lessonType: z.nativeEnum(LessonType).optional(),
 });
 

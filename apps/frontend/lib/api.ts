@@ -9,32 +9,158 @@ export function getAccessToken() {
 }
 
 export function storeAccessToken(accessToken: string) {
+  if (typeof window === 'undefined') {
+    return;
+  }
   window.localStorage.setItem('codesync_access_token', accessToken);
 }
 
-export async function requestJson<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const headers = new Headers(options.headers);
+export function clearAccessToken() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.localStorage.removeItem('codesync_access_token');
+}
+
+export class ApiError extends Error {
+  readonly statusCode: number;
+  readonly code?: string | undefined;
+  readonly details?: readonly string[] | undefined;
+
+  constructor(message: string, statusCode: number, code?: string, details?: readonly string[]) {
+    super(message);
+    this.name = 'ApiError';
+    this.statusCode = statusCode;
+    this.code = code;
+    this.details = details;
+  }
+}
+
+export type RefreshResult =
+  | { readonly status: 'success'; readonly accessToken: string; readonly user: CurrentUser }
+  | { readonly status: 'invalid_session'; readonly error: ApiError }
+  | { readonly status: 'network_error'; readonly error: Error };
+
+let inFlightRefreshPromise: Promise<RefreshResult> | null = null;
+
+export async function refreshAccessToken(): Promise<RefreshResult> {
+  if (inFlightRefreshPromise) {
+    return inFlightRefreshPromise;
+  }
+
+  inFlightRefreshPromise = (async (): Promise<RefreshResult> => {
+    try {
+      const response = await fetch(`${apiUrl}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        const body = (await response.json().catch(() => undefined)) as
+          | {
+              readonly error?: {
+                readonly message?: string;
+                readonly code?: string;
+                readonly details?: readonly string[];
+              };
+            }
+          | undefined;
+
+        const error = new ApiError(
+          body?.error?.message ?? 'Refresh token invalid or expired',
+          response.status,
+          body?.error?.code,
+          body?.error?.details,
+        );
+
+        // Only genuine 401/403 responses indicate the session is truly dead/invalid/revoked
+        if (response.status === 401 || response.status === 403) {
+          clearAccessToken();
+          return { status: 'invalid_session', error };
+        }
+
+        // 5xx responses represent temporary server errors, not an invalid session
+        return { status: 'network_error', error };
+      }
+
+      const data = (await response.json()) as { accessToken: string; user: CurrentUser };
+      storeAccessToken(data.accessToken);
+      return { status: 'success', accessToken: data.accessToken, user: data.user };
+    } catch (err: unknown) {
+      // Network drop / offline error
+      const error = err instanceof Error ? err : new Error('Network error during token refresh');
+      return { status: 'network_error', error };
+    } finally {
+      inFlightRefreshPromise = null;
+    }
+  })();
+
+  return inFlightRefreshPromise;
+}
+
+export interface RequestJsonOptions extends RequestInit {
+  readonly skipAuthRefresh?: boolean | undefined;
+  readonly _isRetry?: boolean | undefined;
+}
+
+export async function requestJson<T>(path: string, options: RequestJsonOptions = {}): Promise<T> {
+  const { skipAuthRefresh = false, _isRetry = false, ...fetchOptions } = options;
+  const headers = new Headers(fetchOptions.headers);
   const accessToken = getAccessToken();
 
-  if (!headers.has('Content-Type') && options.body) {
+  if (!headers.has('Content-Type') && fetchOptions.body) {
     headers.set('Content-Type', 'application/json');
   }
 
-  if (accessToken) {
+  if (accessToken && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${accessToken}`);
   }
 
   const response = await fetch(`${apiUrl}${path}`, {
-    ...options,
+    ...fetchOptions,
     headers,
     credentials: 'include',
   });
 
+  // Intercept 401 and transparently attempt single-flight refresh & retry
+  if (response.status === 401 && !skipAuthRefresh && !_isRetry) {
+    const refreshResult = await refreshAccessToken();
+
+    if (refreshResult.status === 'success') {
+      const retryHeaders = new Headers(fetchOptions.headers);
+      if (!retryHeaders.has('Content-Type') && fetchOptions.body) {
+        retryHeaders.set('Content-Type', 'application/json');
+      }
+      retryHeaders.set('Authorization', `Bearer ${refreshResult.accessToken}`);
+
+      return requestJson<T>(path, {
+        ...fetchOptions,
+        headers: retryHeaders,
+        skipAuthRefresh: true,
+        _isRetry: true,
+      });
+    }
+
+    if (refreshResult.status === 'network_error') {
+      throw refreshResult.error;
+    }
+
+    throw refreshResult.error;
+  }
+
   if (!response.ok) {
     const body = (await response.json().catch(() => undefined)) as
-      | { readonly error?: { readonly message?: string } }
+      | {
+          readonly error?: {
+            readonly message?: string;
+            readonly code?: string;
+            readonly details?: readonly string[];
+          };
+        }
       | undefined;
-    throw new Error(body?.error?.message ?? 'Request failed');
+    const message = body?.error?.message ?? (response.status === 404 ? 'Resource not found' : 'Request failed');
+    throw new ApiError(message, response.status, body?.error?.code, body?.error?.details);
   }
 
   if (response.status === 204) {
@@ -80,6 +206,7 @@ export interface VideoStatus {
     readonly lastErrorCode: string | null;
     readonly lastErrorMessage: string | null;
   } | null;
+  readonly playbackUrl?: string | null;
 }
 
 export interface VideoPlayback {

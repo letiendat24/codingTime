@@ -1,14 +1,17 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { cn } from '../../lib/utils';
 
-type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
-type ButtonSize = 'sm' | 'md' | 'lg';
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'destructive' | 'outline' | 'default';
+export type ButtonSize = 'sm' | 'md' | 'lg';
 
 const variants: Record<ButtonVariant, string> = {
   primary: 'border-primary bg-primary text-primary-foreground hover:bg-primary/90',
+  default: 'border-primary bg-primary text-primary-foreground hover:bg-primary/90',
   secondary: 'border-border bg-card text-foreground hover:bg-muted',
+  outline: 'border-border bg-transparent text-foreground hover:bg-muted',
   ghost: 'border-transparent bg-transparent text-foreground hover:bg-muted',
   danger: 'border-destructive bg-destructive text-destructive-foreground hover:bg-destructive/90',
+  destructive: 'border-destructive bg-destructive text-destructive-foreground hover:bg-destructive/90',
 };
 
 const sizes: Record<ButtonSize, string> = {
@@ -18,13 +21,25 @@ const sizes: Record<ButtonSize, string> = {
 };
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  readonly variant?: ButtonVariant;
-  readonly size?: ButtonSize;
-  readonly isLoading?: boolean;
-  readonly children: ReactNode;
+  readonly variant?: ButtonVariant | undefined;
+  readonly size?: ButtonSize | undefined;
+  readonly isLoading?: boolean | undefined;
+  readonly leftIcon?: ReactNode | undefined;
+  readonly rightIcon?: ReactNode | undefined;
+  readonly children?: ReactNode | undefined;
 }
 
-export function Button({ className, variant = 'primary', size = 'md', isLoading = false, disabled, children, ...props }: ButtonProps) {
+export function Button({
+  className,
+  variant = 'primary',
+  size = 'md',
+  isLoading = false,
+  leftIcon,
+  rightIcon,
+  disabled,
+  children,
+  ...props
+}: ButtonProps) {
   return (
     <button
       className={cn(
@@ -36,8 +51,9 @@ export function Button({ className, variant = 'primary', size = 'md', isLoading 
       disabled={disabled || isLoading}
       {...props}
     >
-      {isLoading ? <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" /> : null}
+      {isLoading ? <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" /> : leftIcon}
       {children}
+      {!isLoading && rightIcon}
     </button>
   );
 }

@@ -1,10 +1,13 @@
 'use client';
 
+import { useEffect, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { useParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
-import { Badge, Button, Card, CardContent, EmptyState, ErrorState, PageHeader, PageSkeleton, StatusBadge } from '../../../design-system';
+import { ArrowLeft, FileCode, History, Play, RotateCcw, Send, Terminal } from 'lucide-react';
+import Link from 'next/link';
+import { useParams } from 'next/navigation';
+import { Badge, Button, Card, CardContent, ErrorState, PageSkeleton, StatusBadge } from '../../../design-system';
+import { useAuthGuard } from '../../../features/auth/hooks/use-auth-guard';
 import {
   type ExecutionDetail,
   type JudgeSubmissionDetail,
@@ -32,11 +35,14 @@ export default function PracticeProblemPage() {
   const queryClient = useQueryClient();
   const { t } = useI18n();
   const { resolvedTheme } = useTheme();
+  const { isLoading: authLoading } = useAuthGuard();
+
   const [activePath, setActivePath] = useState('index.js');
   const [mobileTab, setMobileTab] = useState<'problem' | 'code' | 'result' | 'submissions'>('problem');
   const [files, setFiles] = useState<readonly { readonly path: string; readonly content: string }[]>([]);
   const [executionId, setExecutionId] = useState<string | null>(null);
   const [submissionId, setSubmissionId] = useState<string | null>(null);
+  const [activeConsoleTab, setActiveConsoleTab] = useState<'output' | 'judge'>('output');
 
   const detail = useQuery({
     queryKey: queryKeys.practice.detail(params.slug),
@@ -45,7 +51,8 @@ export default function PracticeProblemPage() {
   const problem = detail.data?.problem;
 
   const openWorkspace = useMutation({
-    mutationFn: () => requestJson<WorkspaceResponse>(`/practice/problems/${problem!.id}/workspace`, { method: 'POST' }),
+    mutationFn: () =>
+      requestJson<WorkspaceResponse>(`/practice/problems/${problem!.id}/workspace`, { method: 'POST' }),
     onSuccess: (data) => {
       setFiles(data.workspace.files);
       setActivePath(data.workspace.entryFile);
@@ -53,43 +60,78 @@ export default function PracticeProblemPage() {
     },
   });
 
+  useEffect(() => {
+    if (problem && !openWorkspace.data && !openWorkspace.isPending) {
+      openWorkspace.mutate();
+    }
+  }, [problem]);
+
   const workspace = openWorkspace.data?.workspace;
   const activeFile = files.find((file) => file.path === activePath) ?? files[0];
+
   const history = useQuery({
     queryKey: queryKeys.practice.submissions(problem?.id),
-    queryFn: () => requestJson<PaginatedResponse<{ readonly id: string; readonly status: string; readonly score: number | null; readonly submittedAt: string }>>(`/practice/problems/${problem!.id}/submissions?page=1&limit=10`),
+    queryFn: () =>
+      requestJson<
+        PaginatedResponse<{
+          readonly id: string;
+          readonly status: string;
+          readonly score: number | null;
+          readonly submittedAt: string;
+        }>
+      >(`/practice/problems/${problem!.id}/submissions?page=1&limit=10`),
     enabled: Boolean(problem),
   });
+
   const execution = useQuery({
     queryKey: queryKeys.execution.detail(executionId),
     queryFn: () => requestJson<ExecutionDetail>(`/executions/${executionId}`),
     enabled: Boolean(executionId),
-    refetchInterval: (query) => (query.state.data?.status === 'QUEUED' || query.state.data?.status === 'RUNNING' ? 1000 : false),
+    refetchInterval: (query) =>
+      query.state.data?.status === 'QUEUED' || query.state.data?.status === 'RUNNING' ? 1000 : false,
   });
+
   const submission = useQuery({
     queryKey: queryKeys.judge.submission(submissionId),
     queryFn: () => requestJson<{ readonly submission: JudgeSubmissionDetail }>(`/submissions/${submissionId}`),
     enabled: Boolean(submissionId),
-    refetchInterval: (query) => (query.state.data?.submission.status === 'QUEUED' || query.state.data?.submission.status === 'RUNNING' ? 1000 : false),
+    refetchInterval: (query) =>
+      query.state.data?.submission.status === 'QUEUED' || query.state.data?.submission.status === 'RUNNING'
+        ? 1000
+        : false,
   });
 
   const save = useMutation({
-    mutationFn: () => requestJson<Workspace>(`/workspaces/${workspace!.id}/files`, { method: 'PUT', body: JSON.stringify({ files }) }),
+    mutationFn: () =>
+      requestJson<Workspace>(`/workspaces/${workspace!.id}/files`, {
+        method: 'PUT',
+        body: JSON.stringify({ files }),
+      }),
   });
+
   const run = useMutation({
     mutationFn: async () => {
       await save.mutateAsync();
-      return requestJson<{ readonly id: string; readonly status: string }>(`/workspaces/${workspace!.id}/executions`, { method: 'POST' });
+      setActiveConsoleTab('output');
+      return requestJson<{ readonly id: string; readonly status: string }>(
+        `/workspaces/${workspace!.id}/executions`,
+        { method: 'POST' },
+      );
     },
     onSuccess: (data) => {
       setExecutionId(data.id);
       setMobileTab('result');
     },
   });
+
   const submit = useMutation({
     mutationFn: async () => {
       await save.mutateAsync();
-      return requestJson<{ readonly id: string; readonly status: string }>(`/practice/problems/${problem!.id}/submissions`, { method: 'POST' });
+      setActiveConsoleTab('judge');
+      return requestJson<{ readonly id: string; readonly status: string }>(
+        `/practice/problems/${problem!.id}/submissions`,
+        { method: 'POST' },
+      );
     },
     onSuccess: (data) => {
       setSubmissionId(data.id);
@@ -97,147 +139,371 @@ export default function PracticeProblemPage() {
       void history.refetch();
     },
   });
+
   const reset = useMutation({
-    mutationFn: () => requestJson<WorkspaceResponse>(`/practice/problems/${problem!.id}/workspace/reset`, { method: 'POST' }),
+    mutationFn: () =>
+      requestJson<WorkspaceResponse>(`/practice/problems/${problem!.id}/workspace/reset`, {
+        method: 'POST',
+      }),
     onSuccess: (data) => {
       setFiles(data.workspace.files);
       setActivePath(data.workspace.entryFile);
     },
   });
 
-  const editorLanguage = useMemo(() => (problem?.language === 'typescript' ? 'typescript' : 'javascript'), [problem?.language]);
+  const editorLanguage = useMemo(
+    () => (problem?.language === 'typescript' ? 'typescript' : 'javascript'),
+    [problem?.language],
+  );
 
-  if (detail.isLoading) {
-    return <main className="px-4 py-6 sm:px-6 lg:px-8"><PageSkeleton /></main>;
+  if (authLoading || detail.isLoading) {
+    return (
+      <main className="min-h-screen px-4 py-8 sm:px-6 lg:px-8">
+        <PageSkeleton />
+      </main>
+    );
   }
 
-  if (detail.isError) {
+  if (detail.isError || !problem) {
     return (
-      <main className="px-4 py-6 sm:px-6 lg:px-8">
-        <ErrorState title={t('common.error')} description="Problem not found or student login required." onRetry={() => void detail.refetch()} />
+      <main className="min-h-screen px-4 py-8 sm:px-6 lg:px-8">
+        <ErrorState
+          title={t('common.error')}
+          description="Problem not found or sign in required."
+          onRetry={() => void detail.refetch()}
+        />
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen px-4 py-6 sm:px-6 lg:px-8">
-      <PageHeader
-        title={problem?.title ?? t('practice.problem')}
-        description={problem ? `${problem.language} · pass ${problem.passScore}%` : t('practice.description')}
-        actions={problem ? (
-          <Button onClick={() => {
-            openWorkspace.mutate();
-            setMobileTab('code');
-          }} type="button">
-            {t('practice.openWorkspace')}
-          </Button>
-        ) : null}
-      />
+    <main className="min-h-screen flex flex-col bg-background">
+      {/* Top Header */}
+      <header className="sticky top-14 z-30 border-b border-border bg-card/95 px-4 py-2.5 backdrop-blur sm:px-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <Link
+              href="/practice"
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span className="hidden sm:inline">{t('practice.title')}</span>
+            </Link>
 
-      {problem ? (
-        <div className="mb-4 flex flex-wrap gap-2">
-          <StatusBadge value={problem.progress.status} />
-          <StatusBadge value={problem.difficulty} />
-          {problem.tags.map((tag) => <Badge key={tag.id}>{tag.name}</Badge>)}
-        </div>
-      ) : null}
+            <span className="text-muted-foreground hidden sm:inline">•</span>
 
-      <div className="mb-4 grid grid-cols-4 gap-2 lg:hidden">
-        {([
-          ['problem', t('practice.problem')],
-          ['code', t('practice.code')],
-          ['result', t('practice.result')],
-          ['submissions', t('practice.submissions')],
-        ] as const).map(([tab, label]) => (
-          <button
-            key={tab}
-            className={`rounded-md border px-2 py-2 text-xs ${mobileTab === tab ? 'bg-card font-medium' : 'text-muted-foreground'}`}
-            type="button"
-            onClick={() => setMobileTab(tab)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-[minmax(360px,0.85fr)_minmax(0,1.15fr)]">
-      {problem ? (
-        <Card className={`${mobileTab === 'problem' ? 'block' : 'hidden'} xl:block`}>
-          <CardContent>
-          <p className="whitespace-pre-wrap text-sm leading-6">{problem.description}</p>
-          <h2 className="mt-6 font-semibold">{t('practice.publicTests')}</h2>
-          <div className="mt-3 grid gap-3">
-            {problem.publicTests.map((test) => (
-              <div key={test.id} className="rounded-md bg-muted p-3 text-sm">
-                <p className="font-medium">{test.name}</p>
-                <pre className="mt-2 whitespace-pre-wrap">Input: {test.input || '(empty)'}</pre>
-                <pre className="whitespace-pre-wrap">Expected: {test.expectedOutput}</pre>
-              </div>
-            ))}
-          </div>
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {workspace ? (
-        <section className={`${mobileTab === 'code' ? 'block' : 'hidden'} grid gap-4 lg:grid-cols-[220px_1fr] xl:block`}>
-          <div className="grid gap-4 lg:grid-cols-[220px_1fr]">
-          <aside className="rounded-md border bg-card p-3">
-            <p className="mb-2 text-sm font-medium">Files</p>
-            {files.map((file) => (
-              <button key={file.path} className={`block w-full rounded-md px-2 py-1 text-left text-sm ${file.path === activePath ? 'bg-muted' : ''}`} onClick={() => setActivePath(file.path)} type="button">
-                {file.path}
-              </button>
-            ))}
-            <div className="mt-4 grid gap-2">
-              <Button variant="secondary" onClick={() => save.mutate()} type="button">{t('common.save')}</Button>
-              <Button variant="secondary" onClick={() => run.mutate()} type="button">{t('common.run')}</Button>
-              <Button onClick={() => submit.mutate()} type="button">{t('common.submit')}</Button>
-              <Button variant="secondary" onClick={() => reset.mutate()} type="button">{t('common.reset')}</Button>
+            <div className="flex items-center gap-2">
+              <h1 className="text-sm font-bold text-foreground line-clamp-1">{problem.title}</h1>
+              <StatusBadge value={problem.difficulty} />
+              <StatusBadge value={problem.progress.status} />
             </div>
-          </aside>
-          <div className="rounded-md border">
-            <MonacoEditor
-              height="480px"
-              language={editorLanguage}
-              path={activeFile?.path ?? 'index.js'}
-              theme={resolvedTheme === 'dark' ? 'vs-dark' : 'light'}
-              value={activeFile?.content ?? ''}
-              onChange={(value) => setFiles(files.map((file) => (file.path === activeFile?.path ? { ...file, content: value ?? '' } : file)))}
-              options={{ minimap: { enabled: false }, fontSize: 14 }}
-            />
           </div>
-          </div>
-        </section>
-      ) : (
-        <EmptyState title={t('practice.openWorkspace')} description={t('practice.description')} action={<Button onClick={() => openWorkspace.mutate()} type="button">{t('practice.openWorkspace')}</Button>} />
-      )}
-      </div>
 
-      <section className="mt-6 grid gap-4 lg:grid-cols-2">
-        <Card className={mobileTab === 'result' ? 'block' : 'hidden lg:block'}>
-          <CardContent>
-          <h2 className="font-semibold">{t('practice.runOutput')}</h2>
-          <pre className="mt-3 min-h-32 whitespace-pre-wrap rounded-md bg-muted p-3 text-sm">{execution.data?.result?.stdout ?? execution.data?.status ?? 'No run yet.'}</pre>
-          {execution.data?.result?.stderr ? <pre className="mt-2 whitespace-pre-wrap rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{execution.data.result.stderr}</pre> : null}
-          </CardContent>
-        </Card>
-        <Card className={mobileTab === 'submissions' || mobileTab === 'result' ? 'block' : 'hidden lg:block'}>
-          <CardContent>
-          <h2 className="font-semibold">{t('practice.submissionHistory')}</h2>
-          <p className="mt-2 text-sm text-muted-foreground">{submission.data?.submission.status ? <StatusBadge value={submission.data.submission.status} /> : 'No active submission.'}</p>
-          {submission.data?.submission.result ? <p className="mt-2 text-sm">Score: {submission.data.submission.result.totalScore}</p> : null}
-          <div className="mt-3 space-y-2">
-            {history.data?.items.map((item) => (
-              <div key={item.id} className="flex items-center justify-between gap-3 rounded-md bg-muted p-2 text-sm">
-                <StatusBadge value={item.status} />
-                <span>{item.score ?? '-'}</span>
-              </div>
-            ))}
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              isLoading={run.isPending || execution.data?.status === 'RUNNING'}
+              onClick={() => run.mutate()}
+            >
+              <Play className="h-3.5 w-3.5 mr-1 text-emerald-500" />
+              <span>{t('common.run')}</span>
+            </Button>
+
+            <Button
+              size="sm"
+              isLoading={submit.isPending || submission.data?.submission.status === 'RUNNING'}
+              onClick={() => submit.mutate()}
+              className="shadow-xs"
+            >
+              <Send className="h-3.5 w-3.5 mr-1" />
+              <span>{t('common.submit')}</span>
+            </Button>
+
+            <Button
+              size="sm"
+              variant="secondary"
+              isLoading={reset.isPending}
+              onClick={() => {
+                if (window.confirm('Reset workspace to starter code?')) {
+                  reset.mutate();
+                }
+              }}
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+            </Button>
           </div>
-          </CardContent>
-        </Card>
-      </section>
+        </div>
+      </header>
+
+      {/* Main Canvas */}
+      <div className="flex-1 p-4 sm:p-6 space-y-6">
+        {/* Mobile View Mode Tabs */}
+        <div className="grid grid-cols-4 gap-1.5 lg:hidden rounded-lg bg-muted p-1 text-xs">
+          {([
+            ['problem', t('practice.problem')],
+            ['code', t('practice.code')],
+            ['result', t('practice.result')],
+            ['submissions', t('practice.submissions')],
+          ] as const).map(([tab, label]) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setMobileTab(tab)}
+              className={`rounded-md py-1.5 text-xs font-medium transition-colors ${
+                mobileTab === tab ? 'bg-card text-foreground font-bold shadow-xs' : 'text-muted-foreground'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Split Desktop Layout: Left = Problem Description & Tests; Right = Workspace & Output */}
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+          {/* Left Column: Problem Description & Submission History */}
+          <div className={`${mobileTab === 'problem' || mobileTab === 'submissions' ? 'block' : 'hidden'} lg:block space-y-6`}>
+            <Card className="shadow-xs">
+              <CardContent className="p-5 sm:p-6 space-y-6">
+                <div>
+                  <h2 className="text-lg font-bold text-foreground">{problem.title}</h2>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {problem.tags.map((tag) => (
+                      <span key={tag.id} className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground font-mono">
+                        #{tag.name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="prose prose-sm dark:prose-invert max-w-none text-foreground leading-relaxed whitespace-pre-wrap">
+                  {problem.description}
+                </div>
+
+                {/* Public Tests */}
+                <div className="space-y-3 pt-4 border-t border-border">
+                  <h3 className="text-sm font-semibold text-foreground">{t('practice.publicTests')}</h3>
+                  <div className="space-y-3">
+                    {problem.publicTests.map((test, index) => (
+                      <div key={test.id} className="rounded-lg border border-border bg-muted/40 p-3.5 space-y-2 text-xs font-mono">
+                        <div className="flex items-center justify-between text-muted-foreground font-sans text-[11px] font-semibold">
+                          <span>{test.name || `Sample Case #${index + 1}`}</span>
+                          <span>Weight: {test.weight}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Input:</span>
+                          <pre className="mt-1 rounded bg-card p-2 text-foreground overflow-auto">
+                            {test.input || '(empty)'}
+                          </pre>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Expected Output:</span>
+                          <pre className="mt-1 rounded bg-card p-2 text-foreground overflow-auto">
+                            {test.expectedOutput}
+                          </pre>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Submission History Accordion */}
+                <div className="space-y-3 pt-4 border-t border-border">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                    <History className="h-4 w-4 text-primary" />
+                    <span>{t('practice.submissionHistory')}</span>
+                  </div>
+                  {history.data?.items && history.data.items.length > 0 ? (
+                    <div className="space-y-2">
+                      {history.data.items.map((item) => (
+                        <div
+                          key={item.id}
+                          className="flex items-center justify-between p-2.5 rounded-lg border border-border bg-card text-xs"
+                        >
+                          <div className="flex items-center gap-2">
+                            <StatusBadge value={item.status} />
+                            <span className="text-muted-foreground">
+                              {new Date(item.submittedAt).toLocaleTimeString()}
+                            </span>
+                          </div>
+                          <span className="font-mono font-bold text-foreground">
+                            Score: {item.score !== null ? `${item.score}/100` : '-'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">No submissions recorded for this problem yet.</p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Right Column: Code Editor & Execution / Judge Panel */}
+          <div className={`${mobileTab === 'code' || mobileTab === 'result' ? 'block' : 'hidden'} lg:block space-y-4`}>
+            {/* Monaco Editor Card */}
+            <div className="overflow-hidden rounded-lg border border-border bg-card shadow-xs">
+              {/* File Tabs */}
+              <div className="flex overflow-x-auto border-b border-border bg-muted/60 px-2 pt-1">
+                {files.map((file) => (
+                  <button
+                    key={file.path}
+                    type="button"
+                    onClick={() => setActivePath(file.path)}
+                    className={`flex items-center gap-1.5 rounded-t-md px-3 py-1.5 text-xs font-mono transition-colors ${
+                      file.path === activePath
+                        ? 'border-t border-l border-r border-border bg-card text-foreground font-semibold -mb-px'
+                        : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                    }`}
+                  >
+                    <FileCode className="h-3 w-3 text-muted-foreground" />
+                    <span>{file.path}</span>
+                  </button>
+                ))}
+              </div>
+
+              <MonacoEditor
+                height="380px"
+                language={editorLanguage}
+                theme={resolvedTheme === 'dark' ? 'vs-dark' : 'light'}
+                value={activeFile?.content ?? ''}
+                onChange={(value) =>
+                  setFiles(
+                    files.map((file) => (file.path === activeFile?.path ? { ...file, content: value ?? '' } : file)),
+                  )
+                }
+                options={{
+                  minimap: { enabled: false },
+                  fontSize: 13,
+                  tabSize: 2,
+                  padding: { top: 8, bottom: 8 },
+                }}
+              />
+            </div>
+
+            {/* Results Console */}
+            <div className="rounded-lg border border-border bg-card shadow-xs overflow-hidden">
+              <div className="flex border-b border-border bg-muted/50 px-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveConsoleTab('output')}
+                  className={`flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors ${
+                    activeConsoleTab === 'output'
+                      ? 'border-primary text-primary font-bold'
+                      : 'border-transparent text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <Terminal className="h-3.5 w-3.5" />
+                  <span>{t('practice.runOutput')}</span>
+                  {execution.data ? (
+                    <Badge tone={execution.data.status === 'SUCCEEDED' ? 'success' : 'neutral'} className="text-[9px] px-1 py-0">
+                      {execution.data.status}
+                    </Badge>
+                  ) : null}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveConsoleTab('judge')}
+                  className={`flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors ${
+                    activeConsoleTab === 'judge'
+                      ? 'border-primary text-primary font-bold'
+                      : 'border-transparent text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <Send className="h-3.5 w-3.5" />
+                  <span>{t('practice.judgeResult')}</span>
+                  {submission.data ? (
+                    <Badge tone={submission.data.submission.passed ? 'success' : 'warning'} className="text-[9px] px-1 py-0">
+                      {submission.data.submission.status}
+                    </Badge>
+                  ) : null}
+                </button>
+              </div>
+
+              <div className="p-3.5 max-h-[300px] overflow-auto font-mono text-xs">
+                {activeConsoleTab === 'output' ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-[11px] text-muted-foreground font-sans">
+                      <span>Status: <StatusBadge value={execution.data?.status ?? 'IDLE'} /></span>
+                      {execution.data?.result ? <span>{execution.data.result.durationMs}ms</span> : null}
+                    </div>
+
+                    {execution.data?.result ? (
+                      <div className="space-y-2 pt-1">
+                        {execution.data.result.stdout ? (
+                          <pre className="rounded bg-muted/60 p-2.5 text-foreground overflow-auto whitespace-pre-wrap">
+                            {execution.data.result.stdout}
+                          </pre>
+                        ) : null}
+
+                        {execution.data.result.stderr ? (
+                          <pre className="rounded bg-destructive/10 p-2.5 text-destructive overflow-auto whitespace-pre-wrap">
+                            {execution.data.result.stderr}
+                          </pre>
+                        ) : null}
+
+                        {!execution.data.result.stdout && !execution.data.result.stderr ? (
+                          <p className="text-muted-foreground py-4 text-center font-sans text-xs">
+                            Execution finished with no output.
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <p className="text-muted-foreground py-6 text-center font-sans text-xs">
+                        Click &quot;Run&quot; to test your solution with sample test cases.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-3 font-sans">
+                    {submission.data?.submission ? (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/40">
+                          <div>
+                            <span className="text-xs text-muted-foreground">Status:</span>
+                            <h4 className="text-base font-bold text-foreground">
+                              {submission.data.submission.status.replace('_', ' ')}
+                            </h4>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-xs text-muted-foreground">Score:</span>
+                            <p className="text-xl font-black text-primary">
+                              {submission.data.submission.score !== null ? `${submission.data.submission.score}/100` : 'N/A'}
+                            </p>
+                          </div>
+                        </div>
+
+                        {submission.data.submission.result?.testResults && submission.data.submission.result.testResults.length > 0 ? (
+                          <div className="space-y-1.5">
+                            <span className="text-xs font-semibold text-foreground">Test Case Evaluation:</span>
+                            {submission.data.submission.result.testResults.map((test, index) => (
+                              <div
+                                key={test.id ?? index}
+                                className="flex items-center justify-between p-2 rounded border border-border bg-card text-xs font-mono"
+                              >
+                                <span>{test.name || `Test #${index + 1}`}</span>
+                                <Badge tone={test.status === 'PASSED' ? 'success' : 'danger'}>
+                                  {test.status}
+                                </Badge>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <p className="text-muted-foreground py-6 text-center text-xs">
+                        Click &quot;Submit&quot; to grade your solution against all public and hidden test cases.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </main>
   );
 }

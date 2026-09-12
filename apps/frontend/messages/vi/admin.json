@@ -1,13 +1,23 @@
 {
-  "dashboard": "Tổng quan nền tảng",
+  "dashboard": "Tổng quan Hệ thống",
   "users": "Người dùng",
   "instructors": "Giảng viên",
   "courses": "Khóa học",
-  "enrollments": "Ghi danh",
-  "operations": "Vận hành",
-  "auditLogs": "Nhật ký audit",
+  "enrollments": "Đăng ký học",
+  "operations": "Tiến trình hệ thống",
+  "auditLogs": "Nhật ký kiểm toán",
   "platformHealth": "Sức khỏe hệ thống",
   "recentActivity": "Hoạt động gần đây",
   "userManagement": "Quản lý người dùng",
-  "adminRequired": "Cần quyền quản trị."
+  "adminRequired": "Yêu cầu quyền Quản trị viên.",
+  "totalUsers": "Tổng người dùng",
+  "totalCourses": "Tổng khóa học",
+  "totalEnrollments": "Tổng lượt đăng ký",
+  "operationalJobs": "Tác vụ nền",
+  "suspend": "Khóa tài khoản",
+  "activate": "Kích hoạt",
+  "manageRoles": "Quản lý vai trò",
+  "userStatus": "Trạng thái",
+  "role": "Vai trò",
+  "allRoles": "Mọi vai trò"
 }

@@ -1,7 +1,7 @@
 import { cn } from '../../lib/utils';
-import { statusToneMap } from '../tokens';
 
-type Tone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
+export type Tone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
+export type BadgeVariant = 'default' | 'secondary' | 'outline' | 'destructive';
 
 const toneClasses: Record<Tone, string> = {
   neutral: 'border-border bg-muted text-muted-foreground',
@@ -11,12 +11,33 @@ const toneClasses: Record<Tone, string> = {
   info: 'border-info/30 bg-info/10 text-info',
 };
 
-export function Badge({ children, tone = 'neutral', className }: Readonly<{ children: React.ReactNode; tone?: Tone; className?: string }>) {
-  return <span className={cn('inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium', toneClasses[tone], className)}>{children}</span>;
-}
+const variantClasses: Record<BadgeVariant, string> = {
+  default: 'border-primary/20 bg-primary/10 text-primary',
+  secondary: 'border-border bg-muted text-muted-foreground',
+  outline: 'border-border bg-transparent text-foreground',
+  destructive: 'border-destructive/30 bg-destructive/10 text-destructive',
+};
 
-export function StatusBadge({ value }: Readonly<{ value: string | null | undefined }>) {
-  const normalized = value ?? 'UNKNOWN';
-  const tone = statusToneMap[normalized as keyof typeof statusToneMap] ?? 'neutral';
-  return <Badge tone={tone}>{normalized.replaceAll('_', ' ')}</Badge>;
+export function Badge({
+  children,
+  tone,
+  variant,
+  className,
+}: Readonly<{
+  children?: React.ReactNode | undefined;
+  tone?: Tone | undefined;
+  variant?: BadgeVariant | undefined;
+  className?: string | undefined;
+}>) {
+  const styling = variant
+    ? variantClasses[variant]
+    : tone
+      ? toneClasses[tone]
+      : toneClasses.neutral;
+
+  return (
+    <span className={cn('inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium', styling, className)}>
+      {children}
+    </span>
+  );
 }

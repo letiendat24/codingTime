@@ -6,7 +6,9 @@ import type { TokenService } from '../modules/auth/token.service';
 export function requireAuth(tokenService: TokenService): RequestHandler {
   return (request: Request, _response: Response, next: NextFunction) => {
     const authorization = request.header('authorization');
-    const token = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : undefined;
+    const token = authorization?.startsWith('Bearer ')
+      ? authorization.slice('Bearer '.length)
+      : (typeof request.query.token === 'string' ? request.query.token : undefined);
 
     if (!token) {
       next(new HttpError(401, 'AUTH_REQUIRED', 'Authentication is required'));

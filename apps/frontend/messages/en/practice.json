@@ -17,5 +17,19 @@
   "noProblems": "No practice problems match your filters.",
   "runOutput": "Run Output",
   "judgeResult": "Judge Result",
-  "submissionHistory": "Submission History"
+  "submissionHistory": "Submission History",
+  "searchPlaceholder": "Search problem by title or tag...",
+  "allDifficulties": "All Difficulties",
+  "allTags": "All Tags",
+  "allStatus": "All Status",
+  "unsolved": "Unsolved",
+  "easy": "Easy",
+  "medium": "Medium",
+  "hard": "Hard",
+  "score": "Score",
+  "time": "Time",
+  "memory": "Memory",
+  "testCases": "Test Cases",
+  "passed": "Passed",
+  "failed": "Failed"
 }

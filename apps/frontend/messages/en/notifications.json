@@ -1,17 +1,22 @@
 {
   "title": "Notifications",
-  "description": "Review platform updates tied to your account.",
+  "description": "Review platform updates and activity tied to your account.",
   "settingsTitle": "Notification Settings",
-  "settingsDescription": "Choose which notification categories are stored for your account.",
+  "settingsDescription": "Choose which notification categories are delivered to your account.",
   "markAllRead": "Mark all read",
   "markRead": "Mark read",
   "markUnread": "Mark unread",
   "open": "Open",
-  "viewAll": "View all",
+  "viewAll": "View all notifications",
   "empty": "No notifications yet.",
   "all": "All",
   "unread": "Unread",
   "read": "Read",
   "allCategories": "All categories",
-  "allTypes": "All types"
+  "allTypes": "All types",
+  "noUnread": "You're all caught up!",
+  "learning": "Learning updates",
+  "practice": "Practice updates",
+  "system": "System updates",
+  "preferencesSaved": "Notification preferences saved"
 }

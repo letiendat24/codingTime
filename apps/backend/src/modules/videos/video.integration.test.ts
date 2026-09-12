@@ -107,14 +107,22 @@ const prisma: PrismaClient = new Prisma({
 });
 const tokenService = new TokenService(testEnv);
 const publishedMessages: AsyncMessage<VideoProcessingRequestedPayload>[] = [];
+import { Readable } from 'node:stream';
+
+const mockManifestBuffer = Buffer.from('#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=2800000\n720p/index.m3u8\n');
+
 const storage = {
   presignedPutObject: async () => 'http://localhost:9000/codesync-local/upload-url',
   presignedGetObject: async () => 'http://localhost:9000/codesync-local/playback-url',
-  statObject: async () => ({
-    size: 1024,
+  statObject: async (_bucket: string, key: string) => ({
+    size: key.endsWith('.m3u8') ? mockManifestBuffer.length : 1024,
     etag: 'test-etag',
-    metaData: { 'content-type': 'video/mp4' },
+    metaData: { 'content-type': key.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp4' },
   }),
+  getObject: async (_bucket: string, key: string) =>
+    Readable.from(key.endsWith('.m3u8') ? mockManifestBuffer : Buffer.alloc(1024, 0)),
+  getPartialObject: async (_bucket: string, _key: string, _offset: number, length: number) =>
+    Readable.from(Buffer.alloc(length, 0)),
 } as unknown as MinioClient;
 const publisher: VideoMessagePublisher = {
   publishProcessingRequested: (message) => {
@@ -391,7 +399,14 @@ describe('video upload and processing integration', () => {
     expect(video.status).toBe(VideoAssetStatus.READY);
     expect(video.renditions).toHaveLength(1);
     expect(playback.status).toBe(200);
-    expect(playback.body.playbackUrl).toContain('playback-url');
+    expect(playback.headers['cache-control']).toBe('no-store, private');
+    expect(playback.body.playbackUrl).toBe(`/api/v1/learning/lessons/${lesson.id}/hls/master.m3u8`);
+
+    const instructorHls = await request(app)
+      .get(`/api/v1/instructor/videos/${videoAssetId}/hls/master.m3u8`)
+      .set('Authorization', `Bearer ${instructor.token}`);
+    expect(instructorHls.status).toBe(200);
+    expect(instructorHls.headers['content-type']).toBe('application/vnd.apple.mpegurl');
   });
 
   it('allows retry only after processing failure', async () => {

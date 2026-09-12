@@ -1,4 +1,5 @@
 import type { Client as MinioClient } from 'minio';
+import type { Request, Response } from 'express';
 import {
   CheckpointProgressStatus,
   LearningActivityType,
@@ -12,6 +13,8 @@ import {
 import type { Env } from '../../config';
 import type { AppLogger } from '../../shared/logger';
 import type { LearningService } from '../learning/learning.service';
+import { processedPrefix } from '../videos/video.constants';
+import { sanitizeHlsPath, streamHlsObject } from '../videos/video-stream.helper';
 import {
   checkpointCompletionUnsupported,
   codeAlongConfigInvalid,
@@ -211,16 +214,31 @@ export class VideoLearningService {
 
     return {
       videoAssetId: video.id,
-      playbackUrl: await this.storage.presignedGetObject(
-        this.env.MINIO_BUCKET,
-        video.masterPlaylistObjectKey,
-        this.env.VIDEO_PLAYBACK_URL_TTL_SECONDS,
-      ),
+      playbackUrl: `/api/v1/learning/lessons/${lessonId}/hls/master.m3u8`,
       durationSeconds: video.durationSeconds,
       progress: progressState(video.progress[0]),
       checkpoints: video.checkpoints.map(mapCheckpoint),
       codeSnapshots: video.codeSnapshots.map(mapSnapshotMetadata),
     };
+  }
+
+  async streamHls(
+    studentId: string,
+    lessonId: string,
+    rawFilePath: string,
+    request: Request,
+    response: Response,
+  ): Promise<void> {
+    const video = await this.repository.findReadyVideoByLessonForStudent(studentId, lessonId);
+
+    if (!video?.masterPlaylistObjectKey) {
+      throw videoLearningNotAccessible();
+    }
+
+    const filePath = sanitizeHlsPath(rawFilePath);
+    const objectKey = `${processedPrefix(video.id)}/${filePath}`;
+
+    await streamHlsObject(this.storage, this.env.MINIO_BUCKET, objectKey, filePath, request, response);
   }
 
   async getCodeAlong(studentId: string, lessonId: string): Promise<StudentCodeAlongResponse> {
