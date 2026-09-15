@@ -1,17 +1,22 @@
 'use client';
 
-import { useEffect, useMemo, useRef } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { useMutation, useQuery, useQueryClient, type UseMutateFunction } from '@tanstack/react-query';
 import {
   ArrowLeft,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Layers,
   AlertCircle,
+  BookOpen,
+  Code,
+  FileCode,
+  Video,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Badge, Button, Card, ErrorState, PageSkeleton, StatusBadge } from '../../../design-system';
+import { Badge, Button, Card, Dialog, ErrorState, PageSkeleton, StatusBadge } from '../../../design-system';
 import { useAuthGuard } from '../../auth/hooks/use-auth-guard';
 import {
   type CourseDetail,
@@ -28,6 +33,20 @@ interface CourseDetailResponse {
   readonly course: CourseDetail;
 }
 
+function getLessonTypeIcon(type: string) {
+  switch (type) {
+    case 'VIDEO':
+      return <Video className="h-3.5 w-3.5 text-blue-500" />;
+    case 'CODING':
+      return <Code className="h-3.5 w-3.5 text-emerald-500" />;
+    case 'PROJECT':
+      return <FileCode className="h-3.5 w-3.5 text-amber-500" />;
+    case 'ARTICLE':
+    default:
+      return <BookOpen className="h-3.5 w-3.5 text-purple-500" />;
+  }
+}
+
 export function LearnScreen() {
   const params = useParams<{ slug: string }>();
   const router = useRouter();
@@ -37,6 +56,8 @@ export function LearnScreen() {
   const toast = useToast();
   const { isLoading: authLoading } = useAuthGuard();
   const lessonAccessControllerRef = useRef(new LessonAccessController());
+  const accessLessonMutateRef = useRef<UseMutateFunction<unknown, Error, string, unknown> | null>(null);
+  const [isContentOpen, setIsContentOpen] = useState(false);
 
   const hasNormalizedUrlRef = useRef(false);
 
@@ -95,6 +116,10 @@ export function LearnScreen() {
     meta: { suppressGlobalToast: true },
   });
 
+  useEffect(() => {
+    accessLessonMutateRef.current = accessLesson.mutate;
+  }, [accessLesson.mutate]);
+
   const completeLesson = useMutation({
     mutationFn: (lessonId: string) =>
       requestJson(`/learning/lessons/${lessonId}/complete`, { method: 'POST' }),
@@ -115,6 +140,11 @@ export function LearnScreen() {
       return;
     }
 
+    const mutateAccessLesson = accessLessonMutateRef.current;
+    if (!mutateAccessLesson) {
+      return;
+    }
+
     const controller = lessonAccessControllerRef.current;
 
     if (!controller.shouldStartAccess(activeLessonId)) {
@@ -122,12 +152,13 @@ export function LearnScreen() {
     }
 
     controller.markStarted(activeLessonId);
-    accessLesson.mutate(activeLessonId, {
+    mutateAccessLesson(activeLessonId, {
       onSettled: () => controller.markSettled(activeLessonId),
     });
-  }, [activeLesson?.id, accessLesson]);
+  }, [activeLesson?.id]);
 
   const handleSelectLesson = (targetLessonId: string) => {
+    setIsContentOpen(false);
     router.push(`/courses/${params.slug}/learn?lesson=${targetLessonId}`);
   };
 
@@ -157,11 +188,14 @@ export function LearnScreen() {
   const currentLessonIndex = activeLesson ? allLessons.findIndex((l) => l.id === activeLesson.id) : -1;
   const prevLesson = currentLessonIndex > 0 ? allLessons[currentLessonIndex - 1] ?? null : null;
   const nextLesson = currentLessonIndex >= 0 && currentLessonIndex < allLessons.length - 1 ? allLessons[currentLessonIndex + 1] ?? null : null;
+  const isLessonCompleted = activeLesson
+    ? progress.data?.lessons.find((l) => l.id === activeLesson.id)?.status === 'COMPLETED'
+    : false;
 
   return (
-    <main className="min-h-screen flex flex-col bg-background">
+    <div className="min-h-full flex flex-col bg-background">
       {/* Top Learning Navigation Bar */}
-      <header className="sticky top-14 z-30 border-b border-border bg-card/95 px-4 py-2.5 backdrop-blur sm:px-6">
+      <header className="sticky top-0 z-30 border-b border-border/70 bg-card/95 px-4 py-3 backdrop-blur-md sm:px-6 shadow-2xs">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <Link
@@ -169,7 +203,7 @@ export function LearnScreen() {
               className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
             >
               <ArrowLeft className="h-4 w-4" />
-              <span className="hidden sm:inline">{courseData.title}</span>
+              <span className="hidden sm:inline font-medium">{courseData.title}</span>
             </Link>
 
             <span className="text-muted-foreground hidden sm:inline">•</span>
@@ -180,9 +214,9 @@ export function LearnScreen() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             {progress.data ? (
-              <div className="hidden sm:flex items-center gap-2 text-xs">
+              <div className="hidden md:flex items-center gap-2 text-xs">
                 <span className="text-muted-foreground">Progress:</span>
                 <span className="font-semibold text-foreground">{progress.data.progress.progressPercent}%</span>
                 <div className="h-1.5 w-20 rounded-full bg-muted overflow-hidden">
@@ -191,30 +225,16 @@ export function LearnScreen() {
               </div>
             ) : null}
 
-            <div className="flex items-center gap-1">
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={!prevLesson}
-                onClick={() => {
-                  if (prevLesson) handleSelectLesson(prevLesson.id);
-                }}
-                title={prevLesson ? `Previous: ${prevLesson.title}` : 'No previous lesson'}
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={!nextLesson}
-                onClick={() => {
-                  if (nextLesson) handleSelectLesson(nextLesson.id);
-                }}
-                title={nextLesson ? `Next: ${nextLesson.title}` : 'No next lesson'}
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-            </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setIsContentOpen(true)}
+              className="text-xs flex items-center gap-1.5"
+            >
+              <Layers className="h-3.5 w-3.5 text-primary" />
+              <span className="hidden sm:inline">Course Content</span>
+              <span className="sm:hidden">Content</span>
+            </Button>
           </div>
         </div>
       </header>
@@ -251,46 +271,124 @@ export function LearnScreen() {
           </div>
         )}
 
-        {/* Modules & Lessons Curriculum Drawer / Accordion */}
-        <section className="pt-6 border-t border-border space-y-4">
-          <h2 className="text-base font-bold text-foreground flex items-center gap-2">
-            <Layers className="h-4 w-4 text-primary" />
-            <span>{t('courses.curriculum')}</span>
-          </h2>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {courseData.modules.map((module) => (
-              <Card key={module.id} className="p-4 space-y-2">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{module.title}</h3>
-                <div className="space-y-1.5">
-                  {module.lessons.map((lesson) => {
-                    const isSelected = lesson.id === activeLesson?.id;
-                    const lessonProgress = progress.data?.lessons.find((item) => item.id === lesson.id);
-                    const status = lessonProgress?.status ?? 'NOT_STARTED';
+        {/* Compact Single Unified Bottom Navigation Footer */}
+        <div className="pt-5 border-t border-border flex flex-wrap items-center justify-between gap-3 text-xs">
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={!prevLesson}
+            onClick={() => {
+              if (prevLesson) handleSelectLesson(prevLesson.id);
+            }}
+            className="flex items-center gap-1.5"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            <span className="max-w-[160px] sm:max-w-[220px] truncate">
+              {prevLesson ? `Prev: ${prevLesson.title}` : 'Previous'}
+            </span>
+          </Button>
 
-                    return (
-                      <button
-                        key={lesson.id}
-                        type="button"
-                        onClick={() => handleSelectLesson(lesson.id)}
-                        className={`w-full flex items-center justify-between p-2 rounded text-left text-xs transition-colors ${
-                          isSelected
-                            ? 'bg-primary/10 border border-primary text-primary font-bold'
-                            : 'hover:bg-muted text-foreground'
-                        }`}
-                      >
-                        <span className="truncate mr-2">
+          <div className="flex items-center gap-2">
+            {activeLesson ? (
+              <Button
+                size="sm"
+                variant={isLessonCompleted ? 'secondary' : 'primary'}
+                onClick={() => completeLesson.mutate(activeLesson.id)}
+                disabled={completeLesson.isPending}
+                className="flex items-center gap-1.5"
+              >
+                <CheckCircle2 className={`h-3.5 w-3.5 ${isLessonCompleted ? 'text-emerald-500' : ''}`} />
+                <span>{isLessonCompleted ? 'Completed' : 'Mark as Completed'}</span>
+              </Button>
+            ) : null}
+
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setIsContentOpen(true)}
+              className="text-xs text-muted-foreground hover:text-foreground hidden md:flex items-center gap-1.5"
+            >
+              <Layers className="h-3.5 w-3.5 text-primary" />
+              <span>Lessons ({allLessons.length})</span>
+            </Button>
+          </div>
+
+          <Button
+            size="sm"
+            variant={nextLesson ? 'primary' : 'secondary'}
+            disabled={!nextLesson}
+            onClick={() => {
+              if (nextLesson) handleSelectLesson(nextLesson.id);
+            }}
+            className="flex items-center gap-1.5"
+          >
+            <span className="max-w-[160px] sm:max-w-[220px] truncate">
+              {nextLesson ? `Next: ${nextLesson.title}` : 'End of Course'}
+            </span>
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+
+      {/* Course Content Modal / Drawer */}
+      <Dialog
+        open={isContentOpen}
+        onClose={() => setIsContentOpen(false)}
+        size="lg"
+        title={
+          <div className="flex items-center justify-between gap-2 pr-4">
+            <div className="flex items-center gap-2">
+              <Layers className="h-5 w-5 text-primary" />
+              <span>Course Content</span>
+            </div>
+            {progress.data ? (
+              <span className="text-xs font-normal text-muted-foreground">
+                {progress.data.progress.progressPercent}% Completed
+              </span>
+            ) : null}
+          </div>
+        }
+        description={`Curriculum for ${courseData.title}`}
+      >
+        <div className="space-y-4 max-h-[65vh] overflow-y-auto pr-1">
+          {courseData.modules.map((module, mIdx) => (
+            <div key={module.id} className="space-y-2">
+              <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider text-muted-foreground border-b border-border pb-1">
+                <span>Module {mIdx + 1}: {module.title}</span>
+                <span>{module.lessons.length} lessons</span>
+              </div>
+              <div className="space-y-1">
+                {module.lessons.map((lesson) => {
+                  const isSelected = lesson.id === activeLesson?.id;
+                  const lessonProgress = progress.data?.lessons.find((item) => item.id === lesson.id);
+                  const status = lessonProgress?.status ?? 'NOT_STARTED';
+
+                  return (
+                    <button
+                      key={lesson.id}
+                      type="button"
+                      onClick={() => handleSelectLesson(lesson.id)}
+                      className={`w-full flex items-center justify-between p-2.5 rounded-lg text-left text-xs transition-colors ${
+                        isSelected
+                          ? 'bg-primary/10 border border-primary/40 text-primary font-bold'
+                          : 'hover:bg-muted text-foreground'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0 mr-2">
+                        {getLessonTypeIcon(lesson.lessonType)}
+                        <span className="truncate">
                           {lesson.position}. {lesson.title}
                         </span>
-                        <StatusBadge value={status} />
-                      </button>
-                    );
-                  })}
-                </div>
-              </Card>
-            ))}
-          </div>
-        </section>
-      </div>
-    </main>
+                      </div>
+                      <StatusBadge value={status} />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Dialog>
+    </div>
   );
 }

@@ -9,6 +9,16 @@ export const semanticColors = {
   warning: 'hsl(var(--warning))',
   danger: 'hsl(var(--destructive))',
   info: 'hsl(var(--info))',
+  pastel: {
+    blue: 'hsl(var(--pastel-blue))',
+    mint: 'hsl(var(--pastel-mint))',
+    sand: 'hsl(var(--pastel-sand))',
+    lavender: 'hsl(var(--pastel-lavender))',
+    rose: 'hsl(var(--pastel-rose))',
+    yellow: 'hsl(var(--pastel-yellow))',
+    cyan: 'hsl(var(--pastel-cyan))',
+    peach: 'hsl(var(--pastel-peach))',
+  },
 } as const;
 
 export const statusToneMap = {

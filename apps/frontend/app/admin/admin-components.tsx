@@ -1,7 +1,6 @@
 'use client';
 
 import { type FormEvent } from 'react';
-import { Card, CardContent } from '../../design-system/components/card';
 import { Button } from '../../design-system/components/button';
 import { StatusBadge as SharedStatusBadge } from '../../design-system/components/status-badge';
 import { ErrorState } from '../../design-system/components/error-state';
@@ -18,16 +17,14 @@ export function MetricCard({
   icon?: React.ReactNode | undefined;
 }>) {
   return (
-    <Card className="relative overflow-hidden">
-      <CardContent className="p-5">
-        <div className="flex items-center justify-between">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
-          {icon ? <div className="text-muted-foreground/60">{icon}</div> : null}
-        </div>
-        <p className="mt-2 text-3xl font-bold tracking-tight text-foreground">{value}</p>
-        {description ? <p className="mt-1 text-xs text-muted-foreground">{description}</p> : null}
-      </CardContent>
-    </Card>
+    <div className="rounded-xl border border-border/70 bg-card p-4 sm:p-5 shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-medium text-muted-foreground">{label}</p>
+        {icon ? <div className="text-muted-foreground/60">{icon}</div> : null}
+      </div>
+      <p className="mt-1.5 text-2xl sm:text-3xl font-bold tracking-tight text-foreground">{value}</p>
+      {description ? <p className="mt-1 text-xs text-muted-foreground/80">{description}</p> : null}
+    </div>
   );
 }
 

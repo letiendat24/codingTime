@@ -63,10 +63,11 @@ export function NotificationBell() {
         onClick={() => setOpen((value) => !value)}
         className="relative"
       >
-        <Bell className="h-5 w-5" />
+        <Bell className="h-4.5 w-4.5 text-foreground/80" />
         {count > 0 ? (
           <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground shadow-xs">
-            {badge}
+            <span className="absolute -inset-0.5 rounded-full bg-primary/40 animate-ping opacity-60 pointer-events-none" />
+            <span className="relative z-10">{badge}</span>
           </span>
         ) : null}
       </IconButton>

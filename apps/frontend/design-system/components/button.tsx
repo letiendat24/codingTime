@@ -5,19 +5,19 @@ export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'dest
 export type ButtonSize = 'sm' | 'md' | 'lg';
 
 const variants: Record<ButtonVariant, string> = {
-  primary: 'border-primary bg-primary text-primary-foreground hover:bg-primary/90',
-  default: 'border-primary bg-primary text-primary-foreground hover:bg-primary/90',
-  secondary: 'border-border bg-card text-foreground hover:bg-muted',
-  outline: 'border-border bg-transparent text-foreground hover:bg-muted',
-  ghost: 'border-transparent bg-transparent text-foreground hover:bg-muted',
-  danger: 'border-destructive bg-destructive text-destructive-foreground hover:bg-destructive/90',
-  destructive: 'border-destructive bg-destructive text-destructive-foreground hover:bg-destructive/90',
+  primary: 'border-transparent bg-foreground text-background shadow-xs hover:bg-foreground/90 active:scale-[0.98]',
+  default: 'border-transparent bg-foreground text-background shadow-xs hover:bg-foreground/90 active:scale-[0.98]',
+  secondary: 'border-border/80 bg-card text-foreground shadow-2xs hover:bg-muted/70 hover:text-foreground active:scale-[0.98]',
+  outline: 'border-border/80 bg-transparent text-foreground hover:bg-muted/60 active:scale-[0.98]',
+  ghost: 'border-transparent bg-transparent text-muted-foreground hover:bg-muted/70 hover:text-foreground active:scale-[0.98]',
+  danger: 'border-transparent bg-destructive text-destructive-foreground shadow-xs hover:bg-destructive/90 active:scale-[0.98]',
+  destructive: 'border-transparent bg-destructive text-destructive-foreground shadow-xs hover:bg-destructive/90 active:scale-[0.98]',
 };
 
 const sizes: Record<ButtonSize, string> = {
-  sm: 'h-8 px-3 text-xs',
-  md: 'h-10 px-4 text-sm',
-  lg: 'h-11 px-5 text-sm',
+  sm: 'h-8 px-3 text-xs rounded-lg',
+  md: 'h-9 px-3.5 text-xs sm:text-sm rounded-lg',
+  lg: 'h-10 px-4 text-sm rounded-lg',
 };
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {

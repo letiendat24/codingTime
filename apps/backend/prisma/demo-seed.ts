@@ -15,6 +15,7 @@ import {
   PrismaClient,
   ProjectAutoCheckType,
   ProjectCriterionType,
+  QuizQuestionType,
   RepositoryProvider,
   RoleName,
   ScoringMode,
@@ -66,6 +67,7 @@ type LessonSpec = {
   readonly codeAlong?: boolean;
   readonly codingTask?: 'validateUsername' | 'normalizeEmail' | 'findUserById' | 'mapUserResponse';
   readonly projectConfig?: boolean;
+  readonly quiz?: boolean;
 };
 
 type ModuleSpec = {
@@ -139,19 +141,52 @@ export function nextStep(steps: LearningStep[]) {
 }
 
 function codingDescription(name: string, rules: readonly string[]) {
+  const exampleMap: Record<string, { input: string; output: string }[]> = {
+    validateUsername: [
+      { input: '"code_sync_1"', output: 'true' },
+      { input: '"ab"', output: 'false' },
+    ],
+    normalizeEmail: [
+      { input: '"  STUDENT@Example.COM  "', output: '"student@example.com"' },
+      { input: '"dev@codesync.local"', output: '"dev@codesync.local"' },
+    ],
+    findUserById: [
+      { input: '[{"id":"u1","name":"An"}], "u1"', output: '{"id":"u1","name":"An"}' },
+      { input: '[{"id":"u1"}], "u2"', output: 'null' },
+    ],
+    mapUserResponse: [
+      { input: '{"id":"u1","email":"a@b.com","displayName":"A","passwordHash":"secret"}', output: '{"id":"u1","email":"a@b.com","displayName":"A"}' },
+      { input: '{"id":"u1","email":"a@b.com","status":"ACTIVE"}', output: '{"id":"u1","email":"a@b.com","status":"ACTIVE"}' },
+    ],
+  };
+
+  const examples = exampleMap[name] ?? [
+    { input: '"sample"', output: 'true' },
+  ];
+
   return `# ${name}
 
-Implement the function described below. Public tests show the basic contract; hidden tests cover boundary cases.
+Implement the function described below. Write your code in the **My Code** workspace on the right, use **Run** for quick execution feedback, and click **Submit** when you are ready for automated judging.
 
-## Rules
+## Requirements
 
 ${rules.map((rule) => `- ${rule}`).join('\n')}
 
-## Starter
+## Examples
 
-\`\`\`js
-module.exports = { ${name} };
-\`\`\`
+${examples
+  .map(
+    (ex, index) => `### Example ${index + 1}
+- **Input:** \`${ex.input}\`
+- **Output:** \`${ex.output}\``,
+  )
+  .join('\n\n')}
+
+## Constraints
+
+- Input size will adhere to standard benchmark limits.
+- Time limit: **5,000 ms**.
+- Memory limit: **128 MB**.
 `;
 }
 
@@ -164,7 +199,24 @@ function starterFiles(task: LessonSpec['codingTask']) {
             path: 'index.js',
             content: `function validateUsername(username) {
   // TODO: return true when username is 3-20 chars and contains only letters, digits, or underscore.
-  return false;
+  if (typeof username !== 'string') return false;
+  return /^[a-zA-Z0-9_]{3,20}$/.test(username);
+}
+
+// Stdin harness for direct Run & Judge verification
+if (require.main === module) {
+  const fs = require('fs');
+  const input = fs.readFileSync(0, 'utf-8').trim();
+  if (input) {
+    try {
+      const parsed = JSON.parse(input);
+      console.log(validateUsername(parsed));
+    } catch {
+      console.log(validateUsername(input));
+    }
+  } else {
+    console.log(validateUsername('code_sync_1'));
+  }
 }
 
 module.exports = { validateUsername };
@@ -179,7 +231,24 @@ module.exports = { validateUsername };
             path: 'index.js',
             content: `function normalizeEmail(email) {
   // TODO: trim whitespace and lowercase the email address.
-  return email;
+  if (typeof email !== 'string') return email;
+  return email.trim().toLowerCase();
+}
+
+// Stdin harness for direct Run & Judge verification
+if (require.main === module) {
+  const fs = require('fs');
+  const input = fs.readFileSync(0, 'utf-8').trim();
+  if (input) {
+    try {
+      const parsed = JSON.parse(input);
+      console.log(JSON.stringify(normalizeEmail(parsed)));
+    } catch {
+      console.log(JSON.stringify(normalizeEmail(input)));
+    }
+  } else {
+    console.log(JSON.stringify(normalizeEmail('  demo@example.com  ')));
+  }
 }
 
 module.exports = { normalizeEmail };
@@ -194,7 +263,24 @@ module.exports = { normalizeEmail };
             path: 'index.js',
             content: `function findUserById(users, id) {
   // TODO: return the matching user or null.
-  return null;
+  if (!Array.isArray(users)) return null;
+  return users.find((u) => u && u.id === id) ?? null;
+}
+
+// Stdin harness for direct Run & Judge verification
+if (require.main === module) {
+  const fs = require('fs');
+  const input = fs.readFileSync(0, 'utf-8').trim();
+  if (input) {
+    try {
+      const parsed = JSON.parse(\`[\${input}]\`);
+      console.log(JSON.stringify(findUserById(parsed[0], parsed[1])));
+    } catch {
+      console.log('null');
+    }
+  } else {
+    console.log(JSON.stringify(findUserById([{ id: 'u1', name: 'Demo' }], 'u1')));
+  }
 }
 
 module.exports = { findUserById };
@@ -209,8 +295,26 @@ module.exports = { findUserById };
           {
             path: 'index.js',
             content: `function mapUserResponse(user) {
-  // TODO: hide passwordHash and internal fields.
-  return user;
+  // TODO: hide passwordHash, refreshTokenHash, and internal fields.
+  if (!user || typeof user !== 'object') return user;
+  const { passwordHash, refreshTokenHash, createdAt, ...publicUser } = user;
+  return publicUser;
+}
+
+// Stdin harness for direct Run & Judge verification
+if (require.main === module) {
+  const fs = require('fs');
+  const input = fs.readFileSync(0, 'utf-8').trim();
+  if (input) {
+    try {
+      const parsed = JSON.parse(input);
+      console.log(JSON.stringify(mapUserResponse(parsed)));
+    } catch {
+      console.log(input);
+    }
+  } else {
+    console.log(JSON.stringify(mapUserResponse({ id: 'u1', email: 'demo@example.com', passwordHash: 'secret' })));
+  }
 }
 
 module.exports = { mapUserResponse };
@@ -313,6 +417,7 @@ const flagshipModules: readonly ModuleSpec[] = [
       { title: 'Validate a Username', type: LessonType.CODING, codingTask: 'validateUsername', description: codingDescription('validateUsername', ['3-20 characters', 'reject spaces', 'reject punctuation']) },
       { title: 'Functions and Error Handling', type: LessonType.ARTICLE, description: article('Functions and Error Handling', ['pure functions', 'throwing errors', 'Result-style return values']) },
       { title: 'Normalize User Input', type: LessonType.CODING, codingTask: 'normalizeEmail', description: codingDescription('normalizeEmail', ['trim whitespace', 'lowercase', 'preserve plus aliases']) },
+      { title: 'TypeScript Review', type: LessonType.QUIZ, quiz: true, description: 'A scored quiz covering TypeScript declarations, interfaces, inference, union types, optional properties, and async basics.' },
     ],
   },
   {
@@ -498,9 +603,14 @@ async function ensureCourseTag(name: string) {
 
 async function replaceCourseTags(courseId: string, tags: readonly string[]) {
   await prisma.courseTagAssignment.deleteMany({ where: { courseId } });
-  for (const tagName of tags) {
+  const uniqueTags = [...new Set(tags)];
+  for (const tagName of uniqueTags) {
     const tag = await ensureCourseTag(tagName);
-    await prisma.courseTagAssignment.create({ data: { courseId, tagId: tag.id } });
+    await prisma.courseTagAssignment.upsert({
+      where: { courseId_tagId: { courseId, tagId: tag.id } },
+      create: { courseId, tagId: tag.id },
+      update: {},
+    });
   }
 }
 
@@ -685,6 +795,138 @@ async function seedProjectConfig(lessonId: string, videoAssetId: string) {
   return config;
 }
 
+async function seedTypeScriptReviewQuiz(lessonId: string) {
+  const quiz = await prisma.quiz.upsert({
+    where: { lessonId },
+    update: {
+      title: 'TypeScript Review',
+      instructions: 'Review core TypeScript concepts from the course. Passing this quiz completes the lesson.',
+      passScore: new Prisma.Decimal(70),
+      shuffleQuestions: false,
+      shuffleOptions: false,
+      showResultImmediately: true,
+    },
+    create: {
+      lessonId,
+      title: 'TypeScript Review',
+      instructions: 'Review core TypeScript concepts from the course. Passing this quiz completes the lesson.',
+      passScore: new Prisma.Decimal(70),
+      shuffleQuestions: false,
+      shuffleOptions: false,
+      showResultImmediately: true,
+    },
+  });
+
+  await prisma.quizQuestion.deleteMany({ where: { quizId: quiz.id } });
+
+  const questions = [
+    {
+      type: QuizQuestionType.SINGLE_CHOICE,
+      prompt: 'Which declaration prevents reassignment of the variable binding?',
+      explanation: '`const` prevents reassignment of the binding, though object contents may still be mutable.',
+      points: 1,
+      options: [
+        ['let', false],
+        ['const', true],
+        ['var', false],
+        ['function', false],
+      ],
+    },
+    {
+      type: QuizQuestionType.MULTIPLE_CHOICE,
+      prompt: 'Which statements about TypeScript interfaces are true?',
+      explanation: 'Interfaces describe object shapes and can be extended; they are erased at runtime.',
+      points: 1,
+      options: [
+        ['They describe object shapes.', true],
+        ['They exist as runtime classes.', false],
+        ['They can extend other interfaces.', true],
+        ['They automatically validate API input at runtime.', false],
+      ],
+    },
+    {
+      type: QuizQuestionType.SINGLE_CHOICE,
+      prompt: 'What does TypeScript infer for `const count = 3` in most contexts?',
+      explanation: 'A const primitive initialized with a literal is inferred as that literal type when not widened by context.',
+      points: 1,
+      options: [
+        ['string', false],
+        ['number[]', false],
+        ['3', true],
+        ['unknown', false],
+      ],
+    },
+    {
+      type: QuizQuestionType.MULTIPLE_CHOICE,
+      prompt: 'Which are valid members of the union type `string | number`?',
+      explanation: 'The union accepts values assignable to either `string` or `number`.',
+      points: 1,
+      options: [
+        ['"codesync"', true],
+        ['42', true],
+        ['true', false],
+        ['{ value: 1 }', false],
+      ],
+    },
+    {
+      type: QuizQuestionType.SINGLE_CHOICE,
+      prompt: 'How do you mark an interface property as optional?',
+      explanation: 'A question mark after the property name marks it optional.',
+      points: 1,
+      options: [
+        ['name!: string', false],
+        ['name?: string', true],
+        ['optional name: string', false],
+        ['name: string | required', false],
+      ],
+    },
+    {
+      type: QuizQuestionType.SINGLE_CHOICE,
+      prompt: 'What return type best describes an async function that returns a User?',
+      explanation: 'Async functions always return a Promise wrapping the resolved value.',
+      points: 1,
+      options: [
+        ['User', false],
+        ['Promise<User>', true],
+        ['Async<User>', false],
+        ['void', false],
+      ],
+    },
+    {
+      type: QuizQuestionType.MULTIPLE_CHOICE,
+      prompt: 'Which annotations help document function boundaries?',
+      explanation: 'Parameter and return types make service boundaries easier to review and refactor.',
+      points: 1,
+      options: [
+        ['Parameter types', true],
+        ['Return type', true],
+        ['Random casts to any', false],
+        ['Unchecked JSON strings', false],
+      ],
+    },
+  ] as const;
+
+  for (const [questionIndex, question] of questions.entries()) {
+    await prisma.quizQuestion.create({
+      data: {
+        quizId: quiz.id,
+        type: question.type,
+        prompt: question.prompt,
+        explanation: question.explanation,
+        points: new Prisma.Decimal(question.points),
+        position: questionIndex + 1,
+        options: {
+          create: question.options.map(([text, isCorrect], optionIndex) => ({
+            text,
+            isCorrect,
+            position: optionIndex + 1,
+          })),
+        },
+      },
+    });
+  }
+}
+
 async function seedCourse(spec: CourseSpec, instructorId: string) {
   const category = await ensureCategory(spec.category);
   const now = new Date();
@@ -716,6 +958,7 @@ async function seedCourse(spec: CourseSpec, instructorId: string) {
   });
 
   await replaceCourseTags(course.id, spec.tags);
+  await prisma.learningActivity.deleteMany({ where: { courseId: course.id } });
   await prisma.courseModule.deleteMany({ where: { courseId: course.id } });
 
   const lessons = [];
@@ -767,6 +1010,10 @@ async function seedCourse(spec: CourseSpec, instructorId: string) {
       if (lessonSpec.codingTask) {
         const video = await createVideoForLesson(lesson.id, instructorId, lessonIndex + 20);
         await seedCodingCheckpoint(lesson.id, video.id, lessonSpec.title, lessonSpec.codingTask, 1);
+      }
+
+      if (lessonSpec.quiz) {
+        await seedTypeScriptReviewQuiz(lesson.id);
       }
     }
   }

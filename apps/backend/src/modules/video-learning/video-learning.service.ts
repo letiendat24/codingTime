@@ -4,6 +4,8 @@ import {
   CheckpointProgressStatus,
   LearningActivityType,
   VideoCheckpointType,
+  VideoPracticeBehavior,
+  VideoPracticeVerificationMode,
   type CodeSnapshot,
   type Prisma,
   type PrismaClient,
@@ -23,6 +25,9 @@ import {
   codeSnapshotFilesInvalid,
   codeSnapshotNotFound,
   codeSnapshotTimestampInvalid,
+  practiceStepInvalid,
+  practiceStepNotFound,
+  practiceStepRequired,
   videoLearningNotAccessible,
   videoProgressInvalidPosition,
 } from './video-learning.errors';
@@ -33,6 +38,8 @@ import type {
   CodeSnapshotInput,
   CodeSnapshotUpdateInput,
   CodeAlongConfigInput,
+  PracticeStepCompleteInput,
+  PracticeStepConfigInput,
   VideoProgressInput,
 } from './video-learning.schemas';
 import type {
@@ -42,6 +49,8 @@ import type {
   CodeAlongConfigResponse,
   InstructorCheckpointResponse,
   InteractiveVideoPlaybackResponse,
+  PracticeStepCompletionResponse,
+  PracticeStepResponse,
   StudentCodeAlongResponse,
   StudentCheckpoint,
   VideoProgressResponse,
@@ -103,6 +112,13 @@ function mapCheckpoint(checkpoint: VideoCheckpoint & { progress?: readonly { sta
     required: checkpoint.required,
     pauseVideo: checkpoint.pauseVideo,
     completed: checkpoint.progress?.[0]?.status === CheckpointProgressStatus.COMPLETED,
+    practiceEnabled: checkpoint.practiceEnabled,
+    practiceVerificationMode: checkpoint.practiceVerificationMode,
+    practiceBehavior: checkpoint.practiceBehavior,
+    practiceSnapshotId: checkpoint.practiceSnapshotId,
+    practiceTargetFilePath: checkpoint.practiceTargetFilePath,
+    practiceTargetStartLine: checkpoint.practiceTargetStartLine,
+    practiceTargetEndLine: checkpoint.practiceTargetEndLine,
   };
 }
 
@@ -118,7 +134,56 @@ function mapInstructorCheckpoint(checkpoint: VideoCheckpoint): InstructorCheckpo
     required: checkpoint.required,
     pauseVideo: checkpoint.pauseVideo,
     position: checkpoint.position,
+    practiceEnabled: checkpoint.practiceEnabled,
+    practiceVerificationMode: checkpoint.practiceVerificationMode,
+    practiceBehavior: checkpoint.practiceBehavior,
+    practiceSnapshotId: checkpoint.practiceSnapshotId,
+    practiceTargetFilePath: checkpoint.practiceTargetFilePath,
+    practiceTargetStartLine: checkpoint.practiceTargetStartLine,
+    practiceTargetEndLine: checkpoint.practiceTargetEndLine,
   };
+}
+
+function mapPracticeStep(checkpoint: VideoCheckpoint & { progress?: readonly { status: CheckpointProgressStatus }[] }): PracticeStepResponse {
+  const status = checkpoint.progress?.[0]?.status ?? CheckpointProgressStatus.NOT_STARTED;
+
+  return {
+    id: checkpoint.id,
+    lessonId: checkpoint.lessonId,
+    videoAssetId: checkpoint.videoAssetId,
+    timestampSeconds: checkpoint.timestampSeconds,
+    title: checkpoint.title,
+    instruction: checkpoint.description,
+    required: checkpoint.required,
+    behavior: checkpoint.practiceBehavior,
+    verificationMode: checkpoint.practiceVerificationMode,
+    snapshotId: checkpoint.practiceSnapshotId,
+    targetFilePath: checkpoint.practiceTargetFilePath,
+    targetStartLine: checkpoint.practiceTargetStartLine,
+    targetEndLine: checkpoint.practiceTargetEndLine,
+    status,
+    completed: status === CheckpointProgressStatus.COMPLETED,
+  };
+}
+
+function normalizeCompareCode(value: string) {
+  return value
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .join('\n')
+    .trim();
+}
+
+function sliceLineRange(content: string, startLine: number | null, endLine: number | null) {
+  if (!startLine && !endLine) {
+    return content;
+  }
+
+  const lines = content.replace(/\r\n?/g, '\n').split('\n');
+  const start = Math.max(0, (startLine ?? 1) - 1);
+  const end = Math.max(start + 1, endLine ?? lines.length);
+  return lines.slice(start, end).join('\n');
 }
 
 function mapSnapshotMetadata(snapshot: Pick<CodeSnapshot, 'id' | 'timestampSeconds' | 'title' | 'language'>): CodeSnapshotMetadata {
@@ -249,9 +314,10 @@ export class VideoLearningService {
     }
 
     const config = lesson.codeAlongConfig;
+    const hasInstructorSnapshots = lesson.videoAsset.codeSnapshots.length > 0;
 
     return {
-      enabled: config?.enabled ?? false,
+      enabled: Boolean(config?.enabled || hasInstructorSnapshots),
       language: config?.language ?? DEFAULT_CODE_ALONG_LANGUAGE,
       entryFile: config?.entryFile ?? DEFAULT_CODE_ALONG_ENTRY_FILE,
       workspaceId: lesson.workspaces[0]?.id ?? null,
@@ -397,7 +463,7 @@ export class VideoLearningService {
       throw checkpointNotFound();
     }
 
-    if (input.timestampSeconds !== undefined) {
+    if (input.timestampSeconds !== undefined && checkpoint.videoAssetId) {
       const video = await this.repository.findVideoForInstructor(instructorId, checkpoint.videoAssetId);
 
       if (!video?.durationSeconds) {
@@ -414,6 +480,42 @@ export class VideoLearningService {
       ...(input.description !== undefined ? { description: input.description } : {}),
       ...(input.required !== undefined ? { required: input.required } : {}),
       ...(input.pauseVideo !== undefined ? { pauseVideo: input.pauseVideo } : {}),
+    });
+
+    return mapInstructorCheckpoint(updated);
+  }
+
+  async updatePracticeStepConfig(instructorId: string, checkpointId: string, input: PracticeStepConfigInput) {
+    const checkpoint = await this.repository.findCheckpointForInstructor(instructorId, checkpointId);
+
+    if (!checkpoint) {
+      throw checkpointNotFound();
+    }
+
+    if (input.practiceSnapshotId) {
+      const snapshot = await this.repository.findSnapshotForInstructor(instructorId, input.practiceSnapshotId);
+
+      if (!snapshot || snapshot.lessonId !== checkpoint.lessonId || snapshot.videoAssetId !== checkpoint.videoAssetId) {
+        throw practiceStepInvalid('Practice snapshot must belong to the same video lesson');
+      }
+    }
+
+    if (
+      input.practiceTargetStartLine &&
+      input.practiceTargetEndLine &&
+      input.practiceTargetEndLine < input.practiceTargetStartLine
+    ) {
+      throw practiceStepInvalid('Target end line must be greater than or equal to start line');
+    }
+
+    const updated = await this.repository.updateCheckpoint(checkpoint.id, {
+      practiceEnabled: input.practiceEnabled,
+      practiceVerificationMode: input.practiceVerificationMode,
+      practiceBehavior: input.practiceBehavior,
+      practiceSnapshotId: input.practiceSnapshotId ?? null,
+      practiceTargetFilePath: input.practiceTargetFilePath ?? null,
+      practiceTargetStartLine: input.practiceTargetStartLine ?? null,
+      practiceTargetEndLine: input.practiceTargetEndLine ?? null,
     });
 
     return mapInstructorCheckpoint(updated);
@@ -466,9 +568,11 @@ export class VideoLearningService {
         this.logger.info({ studentId, checkpointId: checkpoint.id }, 'checkpoint completed');
       }
 
-      const progress = await repository.findVideoProgress(studentId, checkpoint.videoAssetId);
-      shouldCompleteLesson = Boolean(progress?.completedAt) &&
-        await this.hasSatisfiedRequiredCheckpoints(repository, studentId, checkpoint.videoAssetId);
+      if (checkpoint.videoAssetId) {
+        const progress = await repository.findVideoProgress(studentId, checkpoint.videoAssetId);
+        shouldCompleteLesson = Boolean(progress?.completedAt) &&
+          await this.hasSatisfiedRequiredCheckpoints(repository, studentId, checkpoint.videoAssetId);
+      }
 
       const updated = await repository.findCheckpointProgress(studentId, checkpoint.id);
 
@@ -489,6 +593,122 @@ export class VideoLearningService {
       status: checkpointProgress.status,
       completedAt: checkpointProgress.completedAt?.toISOString() ?? null,
       lessonCompleted: shouldCompleteLesson,
+    };
+  }
+
+  async listPracticeSteps(studentId: string, lessonId: string) {
+    const steps = await this.repository.listPracticeStepsForStudent(studentId, lessonId);
+    return { practiceSteps: steps.map(mapPracticeStep) };
+  }
+
+  async completePracticeStep(studentId: string, checkpointId: string, input: PracticeStepCompleteInput): Promise<PracticeStepCompletionResponse> {
+    const now = new Date();
+    let shouldCompleteLesson = false;
+    let lessonId = '';
+
+    const checkpointProgress = await this.prisma.$transaction(async (transaction) => {
+      const repository = new VideoLearningRepository(transaction);
+      const checkpoint = await repository.findPracticeStepForStudent(studentId, checkpointId);
+
+      if (!checkpoint) {
+        throw practiceStepNotFound();
+      }
+
+      lessonId = checkpoint.lessonId;
+
+      if (checkpoint.practiceVerificationMode === VideoPracticeVerificationMode.CODE_COMPARE) {
+        if (!input.workspaceId || !checkpoint.practiceSnapshotId) {
+          throw practiceStepInvalid('Code compare requires a lesson workspace and instructor snapshot');
+        }
+
+        const [workspace, snapshot] = await Promise.all([
+          repository.findLessonWorkspaceForStudent(studentId, checkpoint.lessonId, input.workspaceId),
+          repository.findSnapshotForStudent(studentId, checkpoint.practiceSnapshotId),
+        ]);
+
+        if (!workspace || !snapshot) {
+          throw practiceStepInvalid('Code compare requires accessible student workspace and instructor snapshot');
+        }
+
+        const snapshotFiles = filesFromJson(snapshot);
+        const targetPath = checkpoint.practiceTargetFilePath ?? snapshotFiles[0]?.path;
+        const studentFile = workspace.files.find((file) => file.path === targetPath);
+        const instructorFile = snapshotFiles.find((file) => file.path === targetPath);
+
+        if (!targetPath || !studentFile || !instructorFile) {
+          throw practiceStepInvalid('Target file is missing from student or instructor code');
+        }
+
+        const studentCode = normalizeCompareCode(sliceLineRange(studentFile.content, checkpoint.practiceTargetStartLine, checkpoint.practiceTargetEndLine));
+        const instructorCode = normalizeCompareCode(sliceLineRange(instructorFile.content, checkpoint.practiceTargetStartLine, checkpoint.practiceTargetEndLine));
+
+        if (studentCode !== instructorCode) {
+          throw practiceStepInvalid('Code does not match the instructor reference for this practice step');
+        }
+      }
+
+      if (checkpoint.practiceVerificationMode === VideoPracticeVerificationMode.TESTS) {
+        throw practiceStepInvalid('Use the existing workspace judge submission action to verify TESTS practice steps');
+      }
+
+      const existing = await repository.findCheckpointProgress(studentId, checkpoint.id);
+      await repository.upsertCheckpointCompleted({
+        studentId,
+        checkpointId: checkpoint.id,
+        completedAt: existing?.completedAt ?? now,
+      });
+
+      if (checkpoint.videoAssetId) {
+        const progress = await repository.findVideoProgress(studentId, checkpoint.videoAssetId);
+        shouldCompleteLesson = Boolean(progress?.completedAt) &&
+          await this.hasSatisfiedRequiredCheckpoints(repository, studentId, checkpoint.videoAssetId);
+      }
+
+      const updated = await repository.findCheckpointProgress(studentId, checkpoint.id);
+
+      if (!updated) {
+        throw practiceStepNotFound();
+      }
+
+      return updated;
+    });
+
+    if (shouldCompleteLesson) {
+      await this.learningService.completeLesson(studentId, lessonId);
+    }
+
+    return {
+      id: checkpointId,
+      status: checkpointProgress.status,
+      completedAt: checkpointProgress.completedAt?.toISOString() ?? null,
+      passed: true,
+      message: 'Practice step completed',
+      lessonCompleted: shouldCompleteLesson,
+    };
+  }
+
+  async skipPracticeStep(studentId: string, checkpointId: string) {
+    const now = new Date();
+    const checkpoint = await this.repository.findPracticeStepForStudent(studentId, checkpointId);
+
+    if (!checkpoint) {
+      throw practiceStepNotFound();
+    }
+
+    if (checkpoint.practiceBehavior === VideoPracticeBehavior.REQUIRED || checkpoint.required) {
+      throw practiceStepRequired();
+    }
+
+    await this.repository.upsertCheckpointSkipped({ studentId, checkpointId: checkpoint.id, skippedAt: now });
+    const progress = await this.repository.findCheckpointProgress(studentId, checkpoint.id);
+
+    return {
+      id: checkpointId,
+      status: progress?.status ?? CheckpointProgressStatus.SKIPPED,
+      completedAt: null,
+      passed: false,
+      message: 'Practice step skipped',
+      lessonCompleted: false,
     };
   }
 

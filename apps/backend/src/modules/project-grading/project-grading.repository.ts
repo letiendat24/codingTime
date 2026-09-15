@@ -3,13 +3,11 @@ import {
   CourseStatus,
   EnrollmentStatus,
   LearningActivityType,
-  LessonType,
   NotificationCategory,
   NotificationType,
   Prisma,
   ProjectRubricResultStatus,
   ProjectSubmissionStatus,
-  VideoAssetStatus,
   VideoCheckpointType,
   type PrismaClient,
 } from '@prisma/client';
@@ -33,7 +31,7 @@ export class ProjectGradingRepository {
       where: {
         id: checkpointId,
         type: VideoCheckpointType.PROJECT,
-        videoAsset: { lesson: { module: { course: { ownerInstructorId: instructorId } } } },
+        lesson: { module: { course: { ownerInstructorId: instructorId } } },
       },
       include: {
         projectConfig: {
@@ -72,7 +70,7 @@ export class ProjectGradingRepository {
         id: criterionId,
         projectConfig: {
           checkpoint: {
-            videoAsset: { lesson: { module: { course: { ownerInstructorId: instructorId } } } },
+            lesson: { module: { course: { ownerInstructorId: instructorId } } },
           },
         },
       },
@@ -104,15 +102,11 @@ export class ProjectGradingRepository {
       where: {
         id: checkpointId,
         type: VideoCheckpointType.PROJECT,
-        videoAsset: {
-          status: VideoAssetStatus.READY,
-          lesson: {
-            lessonType: LessonType.VIDEO,
-            module: {
-              course: {
-                status: { in: [CourseStatus.PUBLISHED, CourseStatus.ARCHIVED] },
-                enrollments: { some: { studentId: userId, status: { not: EnrollmentStatus.CANCELLED } } },
-              },
+        lesson: {
+          module: {
+            course: {
+              status: { in: [CourseStatus.PUBLISHED, CourseStatus.ARCHIVED] },
+              enrollments: { some: { studentId: userId, status: { not: EnrollmentStatus.CANCELLED } } },
             },
           },
         },
@@ -121,21 +115,18 @@ export class ProjectGradingRepository {
         projectConfig: {
           include: { criteria: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] } },
         },
-        videoAsset: {
+        lesson: {
           include: {
-            lesson: {
+            module: {
               include: {
-                module: {
-                  include: {
-                    course: {
-                      include: { enrollments: { where: { studentId: userId, status: { not: EnrollmentStatus.CANCELLED } }, take: 1 } },
-                    },
-                  },
+                course: {
+                  include: { enrollments: { where: { studentId: userId, status: { not: EnrollmentStatus.CANCELLED } }, take: 1 } },
                 },
               },
             },
           },
         },
+        videoAsset: true,
       },
     });
   }
@@ -182,7 +173,7 @@ export class ProjectGradingRepository {
   async listSubmissionsForInstructor(instructorId: string, checkpointId: string, input: { readonly skip: number; readonly take: number }) {
     const where = {
       checkpointId,
-      checkpoint: { videoAsset: { lesson: { module: { course: { ownerInstructorId: instructorId } } } } },
+      checkpoint: { lesson: { module: { course: { ownerInstructorId: instructorId } } } },
     };
     const [items, total] = await Promise.all([
       this.prisma.projectSubmission.findMany({
@@ -202,7 +193,7 @@ export class ProjectGradingRepository {
     return this.prisma.projectSubmission.findFirst({
       where: {
         id: submissionId,
-        checkpoint: { videoAsset: { lesson: { module: { course: { ownerInstructorId: instructorId } } } } },
+        checkpoint: { lesson: { module: { course: { ownerInstructorId: instructorId } } } },
       },
       include: {
         projectConfig: { include: { criteria: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] } } },
@@ -262,7 +253,7 @@ export class ProjectGradingRepository {
       include: {
         checkpoint: {
           include: {
-            videoAsset: { include: { lesson: { include: { module: { include: { course: true } } } } } },
+            lesson: { include: { module: { include: { course: true } } } },
           },
         },
       },
@@ -318,17 +309,17 @@ export class ProjectGradingRepository {
       return {
         ...inactiveProjectOutcome(submission.userId, submission.checkpoint.lessonId),
         notification: input.status === ProjectSubmissionStatus.AWAITING_REVIEW ? {
-          userId: submission.checkpoint.videoAsset.lesson.module.course.ownerInstructorId,
+          userId: submission.checkpoint.lesson.module.course.ownerInstructorId,
           type: NotificationType.PROJECT_MANUAL_REVIEW_REQUIRED,
           category: NotificationCategory.PROJECT,
           title: 'Project needs manual review',
           message: `${submission.checkpoint.title} is awaiting manual review.`,
-          actionUrl: `/instructor/courses/${submission.checkpoint.videoAsset.lesson.module.course.id}`,
-          dedupeKey: `PROJECT_MANUAL_REVIEW_REQUIRED:${input.submissionId}:${submission.checkpoint.videoAsset.lesson.module.course.ownerInstructorId}`,
+          actionUrl: `/instructor/courses/${submission.checkpoint.lesson.module.course.id}`,
+          dedupeKey: `PROJECT_MANUAL_REVIEW_REQUIRED:${input.submissionId}:${submission.checkpoint.lesson.module.course.ownerInstructorId}`,
           data: {
             submissionId: input.submissionId,
             checkpointId: submission.checkpointId,
-            courseId: submission.checkpoint.videoAsset.lesson.module.course.id,
+            courseId: submission.checkpoint.lesson.module.course.id,
             score: input.score,
           },
         } : {
@@ -337,12 +328,12 @@ export class ProjectGradingRepository {
           category: NotificationCategory.PROJECT,
           title: 'Project graded',
           message: `${submission.checkpoint.title} was graded with score ${input.score}.`,
-          actionUrl: `/courses/${submission.checkpoint.videoAsset.lesson.module.course.slug}/learn`,
+          actionUrl: `/courses/${submission.checkpoint.lesson.module.course.slug}/learn`,
           dedupeKey: `PROJECT_GRADED:${input.submissionId}:${submission.userId}`,
           data: {
             submissionId: input.submissionId,
             checkpointId: submission.checkpointId,
-            courseId: submission.checkpoint.videoAsset.lesson.module.course.id,
+            courseId: submission.checkpoint.lesson.module.course.id,
             score: input.score,
             passed: input.passed,
           },
@@ -360,12 +351,12 @@ export class ProjectGradingRepository {
         category: NotificationCategory.PROJECT,
         title: 'Project graded',
         message: `${submission.checkpoint.title} was graded with score ${input.score}.`,
-        actionUrl: `/courses/${submission.checkpoint.videoAsset.lesson.module.course.slug}/learn`,
+        actionUrl: `/courses/${submission.checkpoint.lesson.module.course.slug}/learn`,
         dedupeKey: `PROJECT_GRADED:${input.submissionId}:${submission.userId}`,
         data: {
           submissionId: input.submissionId,
           checkpointId: submission.checkpointId,
-          courseId: submission.checkpoint.videoAsset.lesson.module.course.id,
+          courseId: submission.checkpoint.lesson.module.course.id,
           score: input.score,
           passed: input.passed,
         },
@@ -383,7 +374,7 @@ export class ProjectGradingRepository {
   }) {
     const submission = await this.prisma.projectSubmission.findUnique({
       where: { id: input.submissionId },
-      include: { checkpoint: { include: { videoAsset: { include: { lesson: { include: { module: { include: { course: true } } } } } } } } },
+      include: { checkpoint: { include: { lesson: { include: { module: { include: { course: true } } } } } } },
     });
 
     if (!submission) {
@@ -418,12 +409,12 @@ export class ProjectGradingRepository {
           category: NotificationCategory.PROJECT,
           title: 'Project graded',
           message: `${submission.checkpoint.title} was graded with score ${input.score}.`,
-          actionUrl: `/courses/${submission.checkpoint.videoAsset.lesson.module.course.slug}/learn`,
+          actionUrl: `/courses/${submission.checkpoint.lesson.module.course.slug}/learn`,
           dedupeKey: `PROJECT_GRADED:${input.submissionId}:${submission.userId}`,
           data: {
             submissionId: input.submissionId,
             checkpointId: submission.checkpointId,
-            courseId: submission.checkpoint.videoAsset.lesson.module.course.id,
+            courseId: submission.checkpoint.lesson.module.course.id,
             score: input.score,
             passed: input.passed,
           },
@@ -441,12 +432,12 @@ export class ProjectGradingRepository {
         category: NotificationCategory.PROJECT,
         title: 'Project graded',
         message: `${submission.checkpoint.title} was graded with score ${input.score}.`,
-        actionUrl: `/courses/${submission.checkpoint.videoAsset.lesson.module.course.slug}/learn`,
+        actionUrl: `/courses/${submission.checkpoint.lesson.module.course.slug}/learn`,
         dedupeKey: `PROJECT_GRADED:${input.submissionId}:${submission.userId}`,
         data: {
           submissionId: input.submissionId,
           checkpointId: submission.checkpointId,
-          courseId: submission.checkpoint.videoAsset.lesson.module.course.id,
+          courseId: submission.checkpoint.lesson.module.course.id,
           score: input.score,
           passed: input.passed,
         },
@@ -468,7 +459,7 @@ export class ProjectGradingRepository {
   private async completeProjectCheckpoint(userId: string, checkpointId: string, submissionId: string, completedAt: Date) {
     const submission = await this.prisma.projectSubmission.findUnique({
       where: { id: submissionId },
-      include: { checkpoint: { include: { videoAsset: { include: { lesson: { include: { module: { include: { course: true } } } } } } } } },
+      include: { checkpoint: { include: { lesson: { include: { module: { include: { course: true } } } } } } },
     });
 
     if (!submission) {
@@ -490,12 +481,20 @@ export class ProjectGradingRepository {
         data: {
           userId,
           type: LearningActivityType.PROJECT_PASSED,
-          courseId: submission.checkpoint.videoAsset.lesson.module.course.id,
+          courseId: submission.checkpoint.lesson.module.course.id,
           lessonId: submission.checkpoint.lessonId,
           metadata: { checkpointId, submissionId },
           createdAt: completedAt,
         },
       });
+    }
+
+    if (!submission.checkpoint.videoAssetId) {
+      return {
+        lessonShouldComplete: true,
+        lessonId: submission.checkpoint.lessonId,
+        studentId: userId,
+      };
     }
 
     const required = await this.prisma.videoCheckpoint.count({ where: { videoAssetId: submission.checkpoint.videoAssetId, required: true } });

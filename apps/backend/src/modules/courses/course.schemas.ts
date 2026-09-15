@@ -1,4 +1,4 @@
-import { CourseDifficulty, LessonType } from '@prisma/client';
+import { CourseDifficulty, LessonType, ScoringMode, TestCaseVisibility } from '@prisma/client';
 import { z } from 'zod';
 
 export const uuidParamSchema = z.object({
@@ -82,6 +82,35 @@ export const reorderLessonsSchema = z.object({
   lessonIds: z.array(z.string().uuid()).min(1),
 });
 
+export const upsertLessonCodingConfigSchema = z.object({
+  language: z.string().trim().min(1).max(50).default('javascript'),
+  entryFile: z.string().trim().min(1).max(255).default('index.js'),
+  starterFiles: z
+    .array(
+      z.object({
+        path: z.string().trim().min(1).max(255),
+        content: z.string().max(100_000),
+      }),
+    )
+    .min(1)
+    .optional(),
+  timeLimitMs: z.number().int().min(500).max(30_000).optional(),
+  memoryLimitMb: z.number().int().min(16).max(1024).optional(),
+  passScore: z.number().min(0).max(100).optional(),
+  scoringMode: z.nativeEnum(ScoringMode).optional(),
+  testCases: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1).max(160),
+        visibility: z.nativeEnum(TestCaseVisibility),
+        input: z.string().max(50_000),
+        expectedOutput: z.string().max(50_000),
+        weight: z.number().min(0).max(100),
+      }),
+    )
+    .optional(),
+});
+
 export type CourseListQuery = z.infer<typeof paginationSchema>;
 export type InstructorCourseListQuery = z.infer<typeof instructorCourseListQuerySchema>;
 export type CreateCourseInput = z.infer<typeof createCourseSchema>;
@@ -90,3 +119,4 @@ export type CreateModuleInput = z.infer<typeof createModuleSchema>;
 export type UpdateModuleInput = z.infer<typeof updateModuleSchema>;
 export type CreateLessonInput = z.infer<typeof createLessonSchema>;
 export type UpdateLessonInput = z.infer<typeof updateLessonSchema>;
+export type UpsertLessonCodingConfigInput = z.infer<typeof upsertLessonCodingConfigSchema>;

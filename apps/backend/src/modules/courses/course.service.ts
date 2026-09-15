@@ -1,4 +1,4 @@
-import { CourseStatus, Prisma, RoleName, type PrismaClient } from '@prisma/client';
+import { CourseStatus, LessonType, Prisma, RoleName, ScoringMode, type PrismaClient } from '@prisma/client';
 import type {
   CourseListQuery,
   CreateCourseInput,
@@ -8,6 +8,7 @@ import type {
   UpdateCourseInput,
   UpdateLessonInput,
   UpdateModuleInput,
+  UpsertLessonCodingConfigInput,
 } from './course.schemas';
 import {
   categoryNotFound,
@@ -25,6 +26,7 @@ import {
 import { CourseRepository, type CourseWithStructure } from './course.repository';
 import type { InstructorCourseDetail, PublicCourseDetail, PublicCourseSummary } from './course.types';
 import { paginationMeta } from '../../shared/pagination';
+import { QuizService } from '../quiz/quiz.service';
 
 function slugify(value: string) {
   return value
@@ -454,6 +456,112 @@ export class CourseService {
     });
   }
 
+  async getLessonCodingConfig(instructorId: string, lessonId: string) {
+    const lesson = await this.courses.findLessonWithCodingConfig(instructorId, lessonId);
+
+    if (!lesson) {
+      throw lessonNotFound();
+    }
+
+    requireOwnedCourse(lesson.module.course, instructorId);
+
+    const checkpoint = lesson.videoCheckpoints[0];
+    const codingConfig = checkpoint?.codingConfig;
+
+    let starterFiles: { path: string; content: string }[] = [];
+    if (codingConfig?.starterFilesJson && typeof codingConfig.starterFilesJson === 'object') {
+      const json = codingConfig.starterFilesJson as { files?: { path: string; content: string }[] };
+      if (Array.isArray(json.files)) {
+        starterFiles = json.files;
+      }
+    }
+    if (starterFiles.length === 0) {
+      starterFiles = [{ path: codingConfig?.entryFile ?? 'index.js', content: '' }];
+    }
+
+    return {
+      lessonId: lesson.id,
+      checkpointId: checkpoint?.id ?? null,
+      config: codingConfig
+        ? {
+            id: codingConfig.id,
+            language: codingConfig.language,
+            entryFile: codingConfig.entryFile,
+            starterFiles,
+            timeLimitMs: codingConfig.timeLimitMs,
+            memoryLimitMb: codingConfig.memoryLimitMb,
+            passScore: Number(codingConfig.passScore),
+            scoringMode: codingConfig.scoringMode,
+            testCases: codingConfig.testCases.map((t) => ({
+              id: t.id,
+              name: t.name,
+              visibility: t.visibility,
+              input: t.input,
+              expectedOutput: t.expectedOutput,
+              weight: Number(t.weight),
+              position: t.position,
+            })),
+          }
+        : null,
+    };
+  }
+
+  async upsertLessonCodingConfig(instructorId: string, lessonId: string, input: UpsertLessonCodingConfigInput) {
+    const lesson = await this.courses.findLessonWithCodingConfig(instructorId, lessonId);
+
+    if (!lesson) {
+      throw lessonNotFound();
+    }
+
+    requireOwnedCourse(lesson.module.course, instructorId);
+    this.assertEditableDraft(lesson.module.course);
+
+    const entryFile = input.entryFile ?? 'index.js';
+    const starterFiles = input.starterFiles ?? [{ path: entryFile, content: '' }];
+    const timeLimitMs = input.timeLimitMs ?? 5_000;
+    const memoryLimitMb = input.memoryLimitMb ?? 128;
+    const passScore = input.passScore ?? 70;
+    const scoringMode = input.scoringMode ?? ScoringMode.WEIGHTED;
+
+    const config = await this.courses.upsertLessonCodingConfig({
+      lessonId,
+      title: lesson.title,
+      language: input.language ?? 'javascript',
+      entryFile,
+      starterFiles,
+      timeLimitMs,
+      memoryLimitMb,
+      passScore,
+      scoringMode,
+      testCases: input.testCases,
+    });
+
+    return {
+      lessonId,
+      config: config
+        ? {
+            id: config.id,
+            language: config.language,
+            entryFile: config.entryFile,
+            starterFiles,
+            timeLimitMs: config.timeLimitMs,
+            memoryLimitMb: config.memoryLimitMb,
+            passScore: Number(config.passScore),
+            scoringMode: config.scoringMode,
+            testCases: config.testCases.map((t) => ({
+              id: t.id,
+              name: t.name,
+              visibility: t.visibility,
+              input: t.input,
+              expectedOutput: t.expectedOutput,
+              weight: Number(t.weight),
+              position: t.position,
+            })),
+          }
+        : null,
+    };
+  }
+
   async reorderLessons(instructorId: string, moduleId: string, lessonIds: readonly string[]) {
     if (!assertUnique(lessonIds)) {
       throw invalidOrdering();
@@ -526,6 +634,13 @@ export class CourseService {
     for (const module of course.modules) {
       if (!assertValidPositions(module.lessons)) {
         errors.push(`Lessons in module "${module.title}" must have valid ordering`);
+      }
+
+      for (const lesson of module.lessons) {
+        if (lesson.lessonType === LessonType.QUIZ) {
+          const quizErrors = QuizService.validateQuizForPublish(lesson.quiz);
+          errors.push(...quizErrors.map((error) => `Quiz lesson "${lesson.title}": ${error}`));
+        }
       }
     }
 

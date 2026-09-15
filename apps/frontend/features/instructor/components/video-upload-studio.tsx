@@ -10,14 +10,18 @@ import {
   RefreshCw,
   FileVideo,
   RotateCcw,
+  Captions,
+  Trash2,
 } from 'lucide-react';
 import { VideoPlayer } from '../../../components/video-player';
 import { Button } from '../../../design-system/components/button';
 import { Badge } from '../../../design-system/components/badge';
 import { Card, CardContent } from '../../../design-system/components/card';
-import { type VideoStatus, requestJson } from '../../../lib/api';
+import { type InstructorTranscript, type TranscriptSegment, type VideoStatus, requestJson } from '../../../lib/api';
 import { formatTime } from '../../../lib/video-learning';
 import { useToast } from '../../../providers/toast-provider';
+import { Input } from '../../../design-system/components/input';
+import { Select } from '../../../design-system/components/select';
 
 interface VideoUploadIntent {
   readonly uploadUrl: string;
@@ -47,6 +51,8 @@ export function VideoUploadStudio({
   const [activeVideoAssetId, setActiveVideoAssetId] = useState<string | null>(existingVideoAssetId ?? null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isReplacing, setIsReplacing] = useState(false);
+  const [currentPreviewSecond, setCurrentPreviewSecond] = useState(0);
+  const [transcriptSeekSeconds, setTranscriptSeekSeconds] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const notifiedAssetIdRef = useRef<string | null>(null);
 
@@ -456,12 +462,207 @@ export function VideoUploadStudio({
           <div className="overflow-hidden rounded-lg border border-border bg-black">
             <VideoPlayer
               playbackUrl={video.playbackUrl}
-              onTimeChange={onTimeChange}
-              seekToSeconds={seekToSeconds}
+              onTimeChange={(seconds) => {
+                setCurrentPreviewSecond(seconds);
+                onTimeChange?.(seconds);
+              }}
+              seekToSeconds={transcriptSeekSeconds ?? seekToSeconds}
             />
           </div>
+        ) : null}
+
+        {video?.id ? (
+          <TranscriptStudio
+            videoAssetId={video.id}
+            currentSecond={currentPreviewSecond}
+            onSeek={(seconds) => {
+              setTranscriptSeekSeconds(seconds);
+              setTimeout(() => setTranscriptSeekSeconds(null), 100);
+            }}
+          />
         ) : null}
       </CardContent>
     </Card>
   );
+}
+
+function TranscriptStudio({
+  videoAssetId,
+  currentSecond,
+  onSeek,
+}: {
+  readonly videoAssetId: string;
+  readonly currentSecond: number;
+  readonly onSeek: (seconds: number) => void;
+}) {
+  const toast = useToast();
+  const [language, setLanguage] = useState('vi');
+  const [title, setTitle] = useState('');
+  const [fileContent, setFileContent] = useState('');
+  const [filename, setFilename] = useState('transcript.srt');
+  const [segmentsText, setSegmentsText] = useState('00:00.000 --> 00:04.000\\nWelcome to this lesson.');
+
+  const transcripts = useQuery({
+    queryKey: ['instructor-transcripts', videoAssetId],
+    queryFn: () =>
+      requestJson<{ readonly transcripts: readonly InstructorTranscript[] }>(
+        `/instructor/videos/${videoAssetId}/transcripts`,
+      ),
+  });
+
+  const refresh = () => void transcripts.refetch();
+
+  const importTranscript = useMutation({
+    mutationFn: () =>
+      requestJson(`/instructor/videos/${videoAssetId}/transcripts/import`, {
+        method: 'POST',
+        body: JSON.stringify({
+          language,
+          title: title.trim() || null,
+          filename,
+          content: fileContent,
+        }),
+      }),
+    onSuccess: () => {
+      toast.success('Transcript saved');
+      setFileContent('');
+      refresh();
+    },
+    onError: (error) => toast.error('Transcript import failed', error instanceof Error ? error.message : undefined),
+  });
+
+  const saveManual = useMutation({
+    mutationFn: () =>
+      requestJson(`/instructor/videos/${videoAssetId}/transcripts`, {
+        method: 'POST',
+        body: JSON.stringify({
+          language,
+          title: title.trim() || null,
+          status: 'READY',
+          segments: parseManualSegments(segmentsText),
+        }),
+      }),
+    onSuccess: () => {
+      toast.success('Transcript saved');
+      refresh();
+    },
+    onError: (error) => toast.error('Transcript save failed', error instanceof Error ? error.message : undefined),
+  });
+
+  const deleteTranscript = useMutation({
+    mutationFn: (transcriptId: string) =>
+      requestJson(`/instructor/videos/${videoAssetId}/transcripts/${transcriptId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      toast.success('Transcript deleted');
+      refresh();
+    },
+    onError: (error) => toast.error('Delete failed', error instanceof Error ? error.message : undefined),
+  });
+
+  return (
+    <div className="space-y-4 border-t border-border pt-4">
+      <div className="flex items-center gap-2">
+        <Captions className="h-4 w-4 text-primary" />
+        <h4 className="text-sm font-bold text-foreground">Transcript</h4>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-[120px_1fr_1fr]">
+        <Select value={language} onChange={(event) => setLanguage(event.target.value)}>
+          <option value="vi">Vietnamese</option>
+          <option value="en">English</option>
+          <option value="ja">Japanese</option>
+        </Select>
+        <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Transcript title" />
+        <Input value={filename} onChange={(event) => setFilename(event.target.value)} placeholder="lesson.srt or lesson.vtt" />
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-muted-foreground">Upload subtitle file content</p>
+          <textarea
+            className="min-h-32 w-full rounded-md border border-border bg-card p-3 font-mono text-xs text-foreground"
+            value={fileContent}
+            onChange={(event) => setFileContent(event.target.value)}
+            placeholder="Paste .srt or WebVTT content"
+          />
+          <Button size="sm" onClick={() => importTranscript.mutate()} isLoading={importTranscript.isPending} disabled={!fileContent.trim()}>
+            Upload subtitle file
+          </Button>
+        </div>
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-muted-foreground">Manual transcript editor</p>
+          <textarea
+            className="min-h-32 w-full rounded-md border border-border bg-card p-3 font-mono text-xs text-foreground"
+            value={segmentsText}
+            onChange={(event) => setSegmentsText(event.target.value)}
+            placeholder="00:00.000 --> 00:04.000&#10;Transcript text"
+          />
+          <Button size="sm" variant="secondary" onClick={() => saveManual.mutate()} isLoading={saveManual.isPending}>
+            Create transcript
+          </Button>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {(transcripts.data?.transcripts ?? []).map((transcript) => (
+          <div key={transcript.id} className="rounded-lg bg-muted/30 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-semibold text-foreground">{transcript.title ?? transcript.language.toUpperCase()}</p>
+                <p className="text-xs text-muted-foreground">
+                  {transcript.language} · {transcript.segmentCount} segments · {transcript.status}
+                </p>
+              </div>
+              <Button size="sm" variant="ghost" onClick={() => deleteTranscript.mutate(transcript.id)} leftIcon={<Trash2 className="h-3.5 w-3.5" />}>
+                Delete transcript
+              </Button>
+            </div>
+            <div className="mt-2 max-h-40 overflow-y-auto text-xs">
+              {transcript.segments.slice(0, 20).map((segment) => {
+                const active = segment.startTimeMs <= currentSecond * 1000 && currentSecond * 1000 < segment.endTimeMs;
+                return (
+                  <button
+                    key={segment.id}
+                    type="button"
+                    className={`grid w-full grid-cols-[4rem_minmax(0,1fr)] gap-2 rounded px-2 py-1.5 text-left ${active ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:bg-muted'}`}
+                    onClick={() => onSeek(segment.startTimeMs / 1000)}
+                  >
+                    <span className="font-mono">{formatTime(Math.floor(segment.startTimeMs / 1000))}</span>
+                    <span>{segment.text}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function parseManualSegments(value: string): readonly Omit<TranscriptSegment, 'id'>[] {
+  return value
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .map((block) => {
+      const [timeLine, ...textLines] = block.split('\n');
+      const [start, end] = (timeLine ?? '').split('-->').map((part) => part.trim());
+      return {
+        startTimeMs: parseEditorTimeMs(start ?? '00:00.000'),
+        endTimeMs: parseEditorTimeMs(end ?? '00:01.000'),
+        text: textLines.join('\n').trim(),
+      };
+    });
+}
+
+function parseEditorTimeMs(value: string) {
+  const parts = value.split(':');
+  const secondsPart = parts.at(-1) ?? '0';
+  const [secondsText, millisText = '0'] = secondsPart.split('.');
+  const seconds = Number(secondsText);
+  const minutes = Number(parts.at(-2) ?? 0);
+  const hours = Number(parts.length === 3 ? parts[0] : 0);
+  const millis = Number(millisText.padEnd(3, '0').slice(0, 3));
+  return ((hours * 3600) + (minutes * 60) + seconds) * 1000 + millis;
 }

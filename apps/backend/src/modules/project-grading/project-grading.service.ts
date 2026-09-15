@@ -493,22 +493,22 @@ export class ProjectGradingService {
       checkpointId,
       submissionId: submission.id,
       lessonId: checkpoint.lessonId,
-      courseId: checkpoint.videoAsset.lesson.module.course.id,
+      courseId: checkpoint.lesson.module.course.id,
       createdAt: now,
     });
 
     await this.createNotification({
-      userId: checkpoint.videoAsset.lesson.module.course.ownerInstructorId,
+      userId: checkpoint.lesson.module.course.ownerInstructorId,
       type: NotificationType.PROJECT_SUBMITTED,
       category: NotificationCategory.PROJECT,
       title: 'Project submitted',
       message: `${checkpoint.title} received a new project submission.`,
-      actionUrl: `/instructor/courses/${checkpoint.videoAsset.lesson.module.course.id}`,
-      dedupeKey: `PROJECT_SUBMITTED:${submission.id}:${checkpoint.videoAsset.lesson.module.course.ownerInstructorId}`,
+      actionUrl: `/instructor/courses/${checkpoint.lesson.module.course.id}`,
+      dedupeKey: `PROJECT_SUBMITTED:${submission.id}:${checkpoint.lesson.module.course.ownerInstructorId}`,
       data: {
         submissionId: submission.id,
         checkpointId,
-        courseId: checkpoint.videoAsset.lesson.module.course.id,
+        courseId: checkpoint.lesson.module.course.id,
       },
     });
 

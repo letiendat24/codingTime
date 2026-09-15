@@ -470,12 +470,14 @@ export class JudgeService {
       submittedAt: now,
     });
 
+    const course = workspace.checkpoint.lesson?.module?.course ?? workspace.checkpoint.videoAsset?.lesson?.module?.course;
+
     await this.repository.createSubmittedActivity({
       userId,
       checkpointId: workspace.checkpointId,
       submissionId: submission.id,
       lessonId: workspace.checkpoint.lessonId,
-      courseId: workspace.checkpoint.videoAsset.lesson.module.course.id,
+      courseId: course?.id ?? null,
       createdAt: now,
     });
 

@@ -24,6 +24,7 @@ export function createCodeExecutionRouter(
 
   router.post('/learning/checkpoints/:checkpointId/workspace', ...studentOnly, asyncHandler(controller.openCheckpointWorkspace));
   router.post('/learning/lessons/:lessonId/workspace', ...studentOnly, asyncHandler(controller.openLessonWorkspace));
+  router.get('/learning/lessons/:lessonId/coding', ...studentOnly, asyncHandler(controller.getCodingLessonDetails));
   router.get('/workspaces/:workspaceId', ...studentOnly, asyncHandler(controller.getWorkspace));
   router.put('/workspaces/:workspaceId/files', ...studentOnly, asyncHandler(controller.saveFiles));
   router.post('/workspaces/:workspaceId/import-snapshot', ...studentOnly, asyncHandler(controller.importSnapshot));

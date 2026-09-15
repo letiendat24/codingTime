@@ -40,6 +40,10 @@ import { PracticeController } from './modules/practice/practice.controller';
 import { PracticeRepository } from './modules/practice/practice.repository';
 import { createInstructorPracticeRouter, createPracticeRouter } from './modules/practice/practice.routes';
 import { PracticeService } from './modules/practice/practice.service';
+import { QuizController } from './modules/quiz/quiz.controller';
+import { QuizRepository } from './modules/quiz/quiz.repository';
+import { createInstructorQuizRouter, createStudentQuizRouter } from './modules/quiz/quiz.routes';
+import { QuizService } from './modules/quiz/quiz.service';
 import { ProjectGradingController } from './modules/project-grading/project-grading.controller';
 import { ProjectGradingRepository } from './modules/project-grading/project-grading.repository';
 import { createProjectGradingRouter } from './modules/project-grading/project-grading.routes';
@@ -63,6 +67,13 @@ import {
   createStudentVideoLearningRouter,
 } from './modules/video-learning/video-learning.routes';
 import { VideoLearningService } from './modules/video-learning/video-learning.service';
+import { VideoTranscriptController } from './modules/video-transcripts/video-transcript.controller';
+import { VideoTranscriptRepository } from './modules/video-transcripts/video-transcript.repository';
+import {
+  createInstructorVideoTranscriptRouter,
+  createStudentVideoTranscriptRouter,
+} from './modules/video-transcripts/video-transcript.routes';
+import { VideoTranscriptService } from './modules/video-transcripts/video-transcript.service';
 import { VideoController } from './modules/videos/video.controller';
 import type { VideoMessagePublisher } from './modules/videos/video.rabbitmq';
 import { VideoRepository } from './modules/videos/video.repository';
@@ -106,8 +117,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const codeExecutionRepository = new CodeExecutionRepository(prisma);
   const judgeRepository = new JudgeRepository(prisma);
   const practiceRepository = new PracticeRepository(prisma);
+  const quizRepository = new QuizRepository(prisma);
   const projectGradingRepository = new ProjectGradingRepository(prisma);
   const videoLearningRepository = new VideoLearningRepository(prisma);
+  const videoTranscriptRepository = new VideoTranscriptRepository(prisma);
   const adminRepository = new AdminRepository(prisma);
   const notificationRepository = new NotificationRepository(prisma);
   const courseService = new CourseService(prisma, courseRepository);
@@ -141,6 +154,8 @@ export function createApp(options: CreateAppOptions = {}): Express {
     } satisfies CodeJudgeMessagePublisher);
   const judgeService = new JudgeService(prisma, judgeRepository, judgePublisher, env, logger, learningService, notificationService);
   const practiceService = new PracticeService(prisma, practiceRepository, judgeService, env);
+  const quizService = new QuizService(prisma, quizRepository, learningService);
+  const videoTranscriptService = new VideoTranscriptService(prisma, videoTranscriptRepository);
   const projectGradingPublisher =
     options.projectGradingPublisher ??
     ({
@@ -185,8 +200,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const codeExecutionController = new CodeExecutionController(codeExecutionService);
   const judgeController = new JudgeController(judgeService);
   const practiceController = new PracticeController(practiceService);
+  const quizController = new QuizController(quizService);
   const projectGradingController = new ProjectGradingController(projectGradingService);
   const videoLearningController = new VideoLearningController(videoLearningService);
+  const videoTranscriptController = new VideoTranscriptController(videoTranscriptService);
   const adminController = new AdminController(adminService);
   const notificationController = new NotificationController(notificationService);
   const app = express();
@@ -212,8 +229,11 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.use('/api/v1/courses', createCourseRouter(courseController));
   app.use('/api/v1/instructor', createInstructorVideoRouter(videoController, tokenService));
   app.use('/api/v1/instructor', createInstructorVideoLearningRouter(videoLearningController, tokenService));
+  app.use('/api/v1/instructor', createInstructorVideoTranscriptRouter(videoTranscriptController, tokenService));
   app.use('/api/v1/learning', createLearningRouter(learningController, tokenService));
   app.use('/api/v1/learning', createStudentVideoLearningRouter(videoLearningController, tokenService));
+  app.use('/api/v1/learning', createStudentVideoTranscriptRouter(videoTranscriptController, tokenService));
+  app.use('/api/v1/learning', createStudentQuizRouter(quizController, tokenService));
   app.use('/api/v1', createCodeExecutionRouter(codeExecutionController, tokenService, rateLimiterStore, env));
   app.use('/api/v1', createJudgeRouter(judgeController, tokenService, rateLimiterStore, env));
   app.use('/api/v1', createPracticeRouter(practiceController, tokenService, rateLimiterStore, env));
@@ -221,6 +241,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.use('/api/v1/notifications', createNotificationRouter(notificationController, tokenService));
   app.use('/api/v1/instructor', createInstructorCourseRouter(courseController, tokenService));
   app.use('/api/v1/instructor', createInstructorPracticeRouter(practiceController, tokenService));
+  app.use('/api/v1/instructor', createInstructorQuizRouter(quizController, tokenService));
   app.use('/api/v1/users', createUserEnrollmentRouter(enrollmentController, tokenService));
   app.use('/api/v1/users', createUserRouter(userController, tokenService));
 

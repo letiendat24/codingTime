@@ -14,6 +14,7 @@ import {
   updateCourseSchema,
   updateLessonSchema,
   updateModuleSchema,
+  upsertLessonCodingConfigSchema,
   uuidParamSchema,
 } from './course.schemas';
 import { CourseService } from './course.service';
@@ -138,6 +139,19 @@ export class CourseController {
     const params = lessonIdParamSchema.parse(request.params);
     await this.courses.deleteLesson(auth.userId, params.lessonId);
     response.status(204).send();
+  };
+
+  getLessonCodingConfig = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    const params = lessonIdParamSchema.parse(request.params);
+    response.status(200).json(await this.courses.getLessonCodingConfig(auth.userId, params.lessonId));
+  };
+
+  upsertLessonCodingConfig = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    const params = lessonIdParamSchema.parse(request.params);
+    const body = upsertLessonCodingConfigSchema.parse(request.body);
+    response.status(200).json(await this.courses.upsertLessonCodingConfig(auth.userId, params.lessonId, body));
   };
 
   reorderLessons = async (request: Request, response: Response) => {

@@ -223,12 +223,71 @@ export interface VideoPlayback {
   readonly codeSnapshots: readonly CodeSnapshotMetadata[];
 }
 
+export type TranscriptSource = 'MANUAL' | 'FILE_UPLOAD' | 'AUTO_GENERATED';
+export type TranscriptStatus = 'DRAFT' | 'READY' | 'FAILED';
+
+export interface TranscriptSegment {
+  readonly id: string;
+  readonly order?: number;
+  readonly startTimeMs: number;
+  readonly endTimeMs: number;
+  readonly text: string;
+}
+
+export interface StudentTranscriptTrack {
+  readonly id: string;
+  readonly language: string;
+  readonly title: string | null;
+  readonly status: 'READY';
+  readonly segmentCount: number;
+}
+
+export interface StudentTranscript {
+  readonly id: string;
+  readonly language: string;
+  readonly title: string | null;
+  readonly segments: readonly TranscriptSegment[];
+}
+
+export interface InstructorTranscript {
+  readonly id: string;
+  readonly videoAssetId: string;
+  readonly language: string;
+  readonly source: TranscriptSource;
+  readonly status: TranscriptStatus;
+  readonly title: string | null;
+  readonly segmentCount: number;
+  readonly segments: readonly TranscriptSegment[];
+}
+
 export interface CodeAlongMetadata {
   readonly enabled: boolean;
   readonly language: string;
   readonly entryFile: string | null;
   readonly workspaceId: string | null;
   readonly snapshots: readonly CodeSnapshotMetadata[];
+}
+
+export type VideoPracticeVerificationMode = 'NONE' | 'CODE_COMPARE' | 'TESTS';
+export type VideoPracticeBehavior = 'GUIDED' | 'REQUIRED';
+export type PracticeProgressStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED' | 'SKIPPED';
+
+export interface VideoPracticeStep {
+  readonly id: string;
+  readonly lessonId: string;
+  readonly videoAssetId: string | null;
+  readonly timestampSeconds: number;
+  readonly title: string;
+  readonly instruction: string | null;
+  readonly required: boolean;
+  readonly behavior: VideoPracticeBehavior;
+  readonly verificationMode: VideoPracticeVerificationMode;
+  readonly snapshotId: string | null;
+  readonly targetFilePath: string | null;
+  readonly targetStartLine: number | null;
+  readonly targetEndLine: number | null;
+  readonly status: PracticeProgressStatus;
+  readonly completed: boolean;
 }
 
 export interface VideoCheckpoint {
@@ -240,6 +299,13 @@ export interface VideoCheckpoint {
   readonly required: boolean;
   readonly pauseVideo: boolean;
   readonly completed: boolean;
+  readonly practiceEnabled?: boolean;
+  readonly practiceVerificationMode?: VideoPracticeVerificationMode;
+  readonly practiceBehavior?: VideoPracticeBehavior;
+  readonly practiceSnapshotId?: string | null;
+  readonly practiceTargetFilePath?: string | null;
+  readonly practiceTargetStartLine?: number | null;
+  readonly practiceTargetEndLine?: number | null;
 }
 
 export interface CodeSnapshotMetadata {
@@ -333,6 +399,143 @@ export interface JudgeSubmissionDetail {
       readonly stderr: string | null;
       readonly durationMs: number;
       readonly memoryBytes: string | null;
+    }[];
+  } | null;
+}
+
+export type QuizQuestionType = 'SINGLE_CHOICE' | 'MULTIPLE_CHOICE';
+export type QuizAttemptStatus = 'IN_PROGRESS' | 'SUBMITTED';
+
+export interface StudentQuizOption {
+  readonly id: string;
+  readonly text: string;
+  readonly position: number;
+}
+
+export interface StudentQuizQuestion {
+  readonly id: string;
+  readonly type: QuizQuestionType;
+  readonly prompt: string;
+  readonly points: number;
+  readonly position: number;
+  readonly options: readonly StudentQuizOption[];
+}
+
+export interface StudentQuizAttemptSummary {
+  readonly id: string;
+  readonly attemptNumber: number;
+  readonly status: QuizAttemptStatus;
+  readonly startedAt: string;
+  readonly submittedAt: string | null;
+  readonly score: number | null;
+  readonly maxScore: number | null;
+  readonly percentage: number | null;
+  readonly passed: boolean | null;
+}
+
+export interface StudentQuiz {
+  readonly id: string;
+  readonly lessonId: string;
+  readonly title: string;
+  readonly instructions: string | null;
+  readonly passScore: number;
+  readonly questionCount: number;
+  readonly questions: readonly StudentQuizQuestion[];
+  readonly attempts: readonly StudentQuizAttemptSummary[];
+}
+
+export interface QuizAttemptDetail {
+  readonly id: string;
+  readonly quizId: string;
+  readonly status: QuizAttemptStatus;
+  readonly startedAt: string;
+  readonly submittedAt: string | null;
+  readonly score: number | null;
+  readonly maxScore: number | null;
+  readonly percentage: number | null;
+  readonly passed: boolean | null;
+  readonly showDetailedResult: boolean;
+  readonly answers: readonly {
+    readonly questionId: string;
+    readonly selectedOptionIds: readonly string[];
+    readonly isCorrect?: boolean | null;
+    readonly scoreEarned?: number | null;
+    readonly correctOptionIds?: readonly string[];
+    readonly explanation?: string | null;
+  }[];
+}
+
+export interface InstructorQuizOption {
+  readonly id: string;
+  readonly text: string;
+  readonly isCorrect: boolean;
+  readonly position: number;
+}
+
+export interface InstructorQuizQuestion {
+  readonly id: string;
+  readonly type: QuizQuestionType;
+  readonly prompt: string;
+  readonly explanation: string | null;
+  readonly points: number;
+  readonly position: number;
+  readonly options: readonly InstructorQuizOption[];
+}
+
+export interface InstructorQuiz {
+  readonly id: string;
+  readonly lessonId: string;
+  readonly title: string;
+  readonly instructions: string | null;
+  readonly passScore: number;
+  readonly shuffleQuestions: boolean;
+  readonly shuffleOptions: boolean;
+  readonly showResultImmediately: boolean;
+  readonly questions: readonly InstructorQuizQuestion[];
+}
+
+export interface StudentCodingLessonDetails {
+  readonly lessonId: string;
+  readonly title: string;
+  readonly description: string | null;
+  readonly checkpointId: string | null;
+  readonly config: {
+    readonly language: string;
+    readonly entryFile: string;
+    readonly passScore: number;
+    readonly scoringMode: 'ALL_OR_NOTHING' | 'WEIGHTED';
+    readonly timeLimitMs: number;
+    readonly memoryLimitMb: number;
+    readonly publicTestCases: readonly {
+      readonly id: string;
+      readonly name: string;
+      readonly input: string;
+      readonly expectedOutput: string;
+      readonly weight: number;
+      readonly position: number;
+    }[];
+  } | null;
+}
+
+export interface InstructorCodingConfigResponse {
+  readonly lessonId: string;
+  readonly config: {
+    readonly id: string;
+    readonly language: string;
+    readonly entryFile: string;
+    readonly starterFiles: readonly { readonly path: string; readonly content: string }[];
+    readonly timeLimitMs: number;
+    readonly memoryLimitMb: number;
+    readonly passScore: number;
+    readonly scoringMode: 'ALL_OR_NOTHING' | 'WEIGHTED';
+    readonly testCases: readonly {
+      readonly id: string;
+      readonly name: string;
+      readonly visibility: 'PUBLIC' | 'HIDDEN';
+      readonly input: string;
+      readonly expectedOutput: string;
+      readonly weight: number;
+      readonly position: number;
     }[];
   } | null;
 }

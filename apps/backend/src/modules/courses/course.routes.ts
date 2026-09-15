@@ -35,6 +35,8 @@ export function createInstructorCourseRouter(controller: CourseController, token
   router.post('/modules/:moduleId/lessons/reorder', ...instructorOnly, asyncHandler(controller.reorderLessons));
   router.patch('/lessons/:lessonId', ...instructorOnly, asyncHandler(controller.updateLesson));
   router.delete('/lessons/:lessonId', ...instructorOnly, asyncHandler(controller.deleteLesson));
+  router.get('/lessons/:lessonId/coding', ...instructorOnly, asyncHandler(controller.getLessonCodingConfig));
+  router.put('/lessons/:lessonId/coding', ...instructorOnly, asyncHandler(controller.upsertLessonCodingConfig));
 
   return router;
 }

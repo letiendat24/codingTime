@@ -35,6 +35,12 @@ export class CodeExecutionController {
     response.status(200).json({ workspace: await this.codeExecution.openLessonWorkspace(auth.userId, params.lessonId) });
   };
 
+  getCodingLessonDetails = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    const params = lessonIdParamSchema.parse(request.params);
+    response.status(200).json(await this.codeExecution.getCodingLessonDetails(auth.userId, params.lessonId));
+  };
+
   getWorkspace = async (request: Request, response: Response) => {
     const auth = requireRequestAuth(request);
     const params = workspaceIdParamSchema.parse(request.params);

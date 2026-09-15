@@ -8,6 +8,8 @@ import {
   codeSnapshotIdParamSchema,
   codeSnapshotInputSchema,
   codeSnapshotUpdateSchema,
+  practiceStepCompleteSchema,
+  practiceStepConfigSchema,
   videoAssetIdParamSchema,
   videoProgressSchema,
 } from './video-learning.schemas';
@@ -46,6 +48,12 @@ export class VideoLearningController {
     response.status(200).json(await this.videoLearning.getCodeAlong(auth.userId, params.lessonId));
   };
 
+  listPracticeSteps = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    const params = lessonIdParamSchema.parse(request.params);
+    response.status(200).json(await this.videoLearning.listPracticeSteps(auth.userId, params.lessonId));
+  };
+
   updateProgress = async (request: Request, response: Response) => {
     const auth = requireRequestAuth(request);
     const params = videoAssetIdParamSchema.parse(request.params);
@@ -57,6 +65,19 @@ export class VideoLearningController {
     const auth = requireRequestAuth(request);
     const params = checkpointIdParamSchema.parse(request.params);
     response.status(200).json({ checkpointProgress: await this.videoLearning.completeCheckpoint(auth.userId, params.checkpointId) });
+  };
+
+  completePracticeStep = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    const params = checkpointIdParamSchema.parse(request.params);
+    const body = practiceStepCompleteSchema.parse(request.body);
+    response.status(200).json({ practiceProgress: await this.videoLearning.completePracticeStep(auth.userId, params.checkpointId, body) });
+  };
+
+  skipPracticeStep = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    const params = checkpointIdParamSchema.parse(request.params);
+    response.status(200).json({ practiceProgress: await this.videoLearning.skipPracticeStep(auth.userId, params.checkpointId) });
   };
 
   getSnapshotForStudent = async (request: Request, response: Response) => {
@@ -90,6 +111,13 @@ export class VideoLearningController {
     const params = checkpointIdParamSchema.parse(request.params);
     const body = checkpointUpdateSchema.parse(request.body);
     response.status(200).json({ checkpoint: await this.videoLearning.updateCheckpoint(auth.userId, params.checkpointId, body) });
+  };
+
+  updatePracticeStepConfig = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    const params = checkpointIdParamSchema.parse(request.params);
+    const body = practiceStepConfigSchema.parse(request.body);
+    response.status(200).json({ checkpoint: await this.videoLearning.updatePracticeStepConfig(auth.userId, params.checkpointId, body) });
   };
 
   deleteCheckpoint = async (request: Request, response: Response) => {

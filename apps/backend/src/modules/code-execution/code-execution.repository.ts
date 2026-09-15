@@ -19,25 +19,73 @@ export class CodeExecutionRepository {
       where: {
         id: checkpointId,
         type: VideoCheckpointType.CODING,
-        videoAsset: {
-          status: VideoAssetStatus.READY,
-          lesson: {
-            module: {
-              course: {
-                status: { in: [CourseStatus.PUBLISHED, CourseStatus.ARCHIVED] },
-                enrollments: {
-                  some: { studentId, status: { not: EnrollmentStatus.CANCELLED } },
+        OR: [
+          {
+            videoAsset: {
+              status: VideoAssetStatus.READY,
+              lesson: {
+                module: {
+                  course: {
+                    status: { in: [CourseStatus.PUBLISHED, CourseStatus.ARCHIVED] },
+                    enrollments: {
+                      some: { studentId, status: { not: EnrollmentStatus.CANCELLED } },
+                    },
+                  },
                 },
               },
+            },
+          },
+          {
+            lesson: {
+              module: {
+                course: {
+                  status: { in: [CourseStatus.PUBLISHED, CourseStatus.ARCHIVED] },
+                  enrollments: {
+                    some: { studentId, status: { not: EnrollmentStatus.CANCELLED } },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+      include: {
+        codingConfig: {
+          include: { testCases: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] } },
+        },
+        lesson: true,
+        videoAsset: {
+          include: { lesson: true },
+        },
+      },
+    });
+  }
+
+  async findCodingLessonForStudent(studentId: string, lessonId: string) {
+    return this.prisma.lesson.findFirst({
+      where: {
+        id: lessonId,
+        lessonType: LessonType.CODING,
+        module: {
+          course: {
+            status: { in: [CourseStatus.PUBLISHED, CourseStatus.ARCHIVED] },
+            enrollments: {
+              some: { studentId, status: { not: EnrollmentStatus.CANCELLED } },
             },
           },
         },
       },
       include: {
-        codingConfig: true,
-        videoAsset: {
-          include: { lesson: true },
+        videoCheckpoints: {
+          where: { type: VideoCheckpointType.CODING },
+          include: {
+            codingConfig: {
+              include: { testCases: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] } },
+            },
+          },
+          orderBy: { position: 'asc' },
         },
+        codeAlongConfig: true,
       },
     });
   }
@@ -60,10 +108,23 @@ export class CodeExecutionRepository {
             enrollments: { some: { studentId, status: { not: EnrollmentStatus.CANCELLED } } },
           },
         },
-        codeAlongConfig: { enabled: true },
         videoAsset: { status: VideoAssetStatus.READY },
+        OR: [
+          { codeAlongConfig: { enabled: true } },
+          { videoAsset: { codeSnapshots: { some: {} } } },
+        ],
       },
-      include: { codeAlongConfig: true },
+      include: {
+        codeAlongConfig: true,
+        videoAsset: {
+          include: {
+            codeSnapshots: {
+              orderBy: [{ timestampSeconds: 'asc' }, { createdAt: 'asc' }],
+              take: 1,
+            },
+          },
+        },
+      },
     });
   }
 

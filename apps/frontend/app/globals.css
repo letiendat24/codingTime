@@ -3,58 +3,148 @@
 @tailwind utilities;
 
 :root {
-  --background: 210 40% 98%;
-  --foreground: 222 47% 11%;
-  --card: 0 0% 100%;
-  --card-foreground: 222 47% 11%;
-  --muted: 210 40% 96%;
-  --muted-foreground: 215 16% 47%;
-  --primary: 217 91% 60%;
+  /* Warm neutral light palette (#F8F8F6 app background, #FFFFFF card, #F4F4F1 subtle) */
+  --background: 45 10% 97.3%; /* #F8F8F6 */
+  --foreground: 0 0% 9%;      /* #171717 */
+  --card: 0 0% 100%;          /* #FFFFFF */
+  --card-foreground: 0 0% 9%; /* #171717 */
+  --muted: 45 7% 94.5%;       /* #F4F4F1 */
+  --muted-foreground: 45 2% 42%; /* #6B6B67 */
+  --primary: 222 47% 11%;     /* #0F172A crisp slate/charcoal */
   --primary-foreground: 0 0% 100%;
-  --border: 214 32% 91%;
-  --ring: 217 91% 60%;
-  --success: 160 84% 39%;
-  --warning: 38 92% 50%;
-  --destructive: 0 84% 60%;
+  --border: 45 4% 90.5%;      /* #E8E8E4 */
+  --ring: 222 47% 11%;
+  --success: 152 56% 36%;
+  --warning: 38 88% 46%;
+  --destructive: 0 74% 54%;
   --destructive-foreground: 0 0% 100%;
-  --info: 217 91% 60%;
-  --radius: 0.5rem;
+  --info: 212 84% 52%;
+  --radius: 0.625rem;
+
+  /* Pastel Content Tokens */
+  --pastel-blue: 214 62% 94%;      /* #E7EFF8 */
+  --pastel-mint: 144 32% 93%;      /* #E6F2EA */
+  --pastel-sand: 38 40% 91%;       /* #F2ECE1 */
+  --pastel-lavender: 257 33% 94%;  /* #ECE9F5 */
+  --pastel-rose: 343 38% 94%;      /* #F4E8EC */
+  --pastel-yellow: 50 52% 91%;     /* #F3EFD9 */
+  --pastel-cyan: 184 32% 92%;      /* #E4F1F2 */
+  --pastel-peach: 27 60% 93%;      /* #F7ECE1 */
 }
 
 .dark {
-  --background: 222 47% 7%;
-  --foreground: 210 40% 98%;
-  --card: 222 47% 11%;
-  --card-foreground: 210 40% 98%;
-  --muted: 217 33% 17%;
-  --muted-foreground: 215 20% 65%;
-  --primary: 217 91% 60%;
-  --primary-foreground: 0 0% 100%;
-  --border: 217 26% 22%;
-  --ring: 217 91% 60%;
-  --success: 160 84% 39%;
-  --warning: 38 92% 50%;
-  --destructive: 0 73% 58%;
+  /* Soft dark palette (calm dark surfaces, no fluorescent borders) */
+  --background: 40 4% 8.5%;    /* #161615 */
+  --foreground: 40 4% 94%;     /* #F0F0ED */
+  --card: 40 4% 11.5%;         /* #1E1E1C */
+  --card-foreground: 40 4% 94%;/* #F0F0ED */
+  --muted: 40 4% 15.5%;        /* #292926 */
+  --muted-foreground: 40 3% 60%; /* #9C9C96 */
+  --primary: 0 0% 98%;         /* Crisp white / bright contrast */
+  --primary-foreground: 0 0% 9%;
+  --border: 40 4% 19.5%;       /* #333330 */
+  --ring: 0 0% 98%;
+  --success: 152 48% 48%;
+  --warning: 38 78% 54%;
+  --destructive: 0 68% 58%;
   --destructive-foreground: 0 0% 100%;
-  --info: 217 91% 60%;
+  --info: 212 76% 58%;
+
+  /* Muted Dark Pastel Content Tokens */
+  --pastel-blue: 216 35% 18%;
+  --pastel-mint: 144 26% 17%;
+  --pastel-sand: 38 22% 18%;
+  --pastel-lavender: 257 24% 20%;
+  --pastel-rose: 343 25% 19%;
+  --pastel-yellow: 50 28% 18%;
+  --pastel-cyan: 184 26% 17%;
+  --pastel-peach: 27 28% 18%;
 }
 
 * {
   border-color: hsl(var(--border));
 }
 
+html,
 body {
   margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
   background: hsl(var(--background));
   color: hsl(var(--foreground));
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
 }
 
 ::selection {
-  background: hsl(var(--primary) / 0.18);
+  background: hsl(var(--primary) / 0.14);
 }
 
 pre,
 code {
   font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
+
+/* Custom Minimalist Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.2);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.35);
+}
+
+/* Micro-interaction & Keyframe Animations */
+@keyframes pulse-subtle {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes float-subtle {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2px);
+  }
+}
+
+.animate-pulse-subtle {
+  animation: pulse-subtle 3s ease-in-out infinite;
+}
+
+.animate-float-subtle {
+  animation: float-subtle 4s ease-in-out infinite;
+}
+
+/* Smooth card & interactive transitions */
+.interactive-card {
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1), border-color 200ms ease;
+}
+
+.interactive-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px -4px rgba(0, 0, 0, 0.06), 0 2px 6px -2px rgba(0, 0, 0, 0.04);
+}
+
+.dark .interactive-card:hover {
+  box-shadow: 0 6px 20px -4px rgba(0, 0, 0, 0.4), 0 2px 6px -2px rgba(0, 0, 0, 0.3);
+}
+

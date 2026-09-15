@@ -2,6 +2,9 @@ import {
   CourseStatus,
   Prisma,
   RoleName,
+  ScoringMode,
+  TestCaseVisibility,
+  VideoCheckpointType,
   type CourseDifficulty,
   type LessonType,
   type PrismaClient,
@@ -25,6 +28,18 @@ const courseInclude = {
   modules: {
     include: {
       lessons: {
+        include: {
+          quiz: {
+            include: {
+              questions: {
+                include: {
+                  options: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] },
+                },
+                orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+              },
+            },
+          },
+        },
         orderBy: {
           position: 'asc',
         },
@@ -326,5 +341,113 @@ export class CourseRepository {
 
   async setLessonPosition(lessonId: string, position: number) {
     await this.prisma.lesson.update({ where: { id: lessonId }, data: { position } });
+  }
+
+  async findLessonWithCodingConfig(instructorId: string, lessonId: string) {
+    return this.prisma.lesson.findFirst({
+      where: {
+        id: lessonId,
+        module: {
+          course: {
+            ownerInstructorId: instructorId,
+          },
+        },
+      },
+      include: {
+        module: { include: { course: true } },
+        videoCheckpoints: {
+          where: { type: VideoCheckpointType.CODING },
+          include: {
+            codingConfig: {
+              include: { testCases: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] } },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  async upsertLessonCodingConfig(input: {
+    readonly lessonId: string;
+    readonly title: string;
+    readonly language: string;
+    readonly entryFile: string;
+    readonly starterFiles: readonly { readonly path: string; readonly content: string }[];
+    readonly timeLimitMs: number;
+    readonly memoryLimitMb: number;
+    readonly passScore: number;
+    readonly scoringMode: ScoringMode;
+    readonly testCases?: readonly {
+      readonly name: string;
+      readonly visibility: TestCaseVisibility;
+      readonly input: string;
+      readonly expectedOutput: string;
+      readonly weight: number;
+    }[] | undefined;
+  }) {
+    let checkpoint = await this.prisma.videoCheckpoint.findFirst({
+      where: { lessonId: input.lessonId, type: VideoCheckpointType.CODING },
+      include: { codingConfig: true },
+    });
+
+    if (!checkpoint) {
+      checkpoint = await this.prisma.videoCheckpoint.create({
+        data: {
+          lessonId: input.lessonId,
+          videoAssetId: null,
+          timestampSeconds: 0,
+          type: VideoCheckpointType.CODING,
+          title: input.title,
+          required: true,
+          position: 1,
+        },
+        include: { codingConfig: true },
+      });
+    }
+
+    const codingConfig = await this.prisma.codingCheckpointConfig.upsert({
+      where: { checkpointId: checkpoint.id },
+      create: {
+        checkpointId: checkpoint.id,
+        language: input.language,
+        entryFile: input.entryFile,
+        starterFilesJson: { files: input.starterFiles } as Prisma.InputJsonValue,
+        timeLimitMs: input.timeLimitMs,
+        memoryLimitMb: input.memoryLimitMb,
+        passScore: new Prisma.Decimal(input.passScore),
+        scoringMode: input.scoringMode,
+      },
+      update: {
+        language: input.language,
+        entryFile: input.entryFile,
+        starterFilesJson: { files: input.starterFiles } as Prisma.InputJsonValue,
+        timeLimitMs: input.timeLimitMs,
+        memoryLimitMb: input.memoryLimitMb,
+        passScore: new Prisma.Decimal(input.passScore),
+        scoringMode: input.scoringMode,
+      },
+    });
+
+    if (input.testCases) {
+      await this.prisma.testCase.deleteMany({ where: { codingCheckpointConfigId: codingConfig.id } });
+      for (const [index, test] of input.testCases.entries()) {
+        await this.prisma.testCase.create({
+          data: {
+            codingCheckpointConfigId: codingConfig.id,
+            name: test.name,
+            visibility: test.visibility,
+            input: test.input,
+            expectedOutput: test.expectedOutput,
+            weight: new Prisma.Decimal(test.weight),
+            position: index + 1,
+          },
+        });
+      }
+    }
+
+    return this.prisma.codingCheckpointConfig.findUnique({
+      where: { id: codingConfig.id },
+      include: { testCases: { orderBy: { position: 'asc' } } },
+    });
   }
 }

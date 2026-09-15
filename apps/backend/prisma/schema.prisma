@@ -39,6 +39,16 @@ enum LessonType {
   QUIZ
 }
 
+enum QuizQuestionType {
+  SINGLE_CHOICE
+  MULTIPLE_CHOICE
+}
+
+enum QuizAttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+}
+
 enum EnrollmentStatus {
   ACTIVE
   COMPLETED
@@ -91,10 +101,34 @@ enum VideoCheckpointType {
   PROJECT
 }
 
+enum TranscriptSource {
+  MANUAL
+  FILE_UPLOAD
+  AUTO_GENERATED
+}
+
+enum TranscriptStatus {
+  DRAFT
+  READY
+  FAILED
+}
+
 enum CheckpointProgressStatus {
   NOT_STARTED
   IN_PROGRESS
   COMPLETED
+  SKIPPED
+}
+
+enum VideoPracticeVerificationMode {
+  NONE
+  CODE_COMPARE
+  TESTS
+}
+
+enum VideoPracticeBehavior {
+  GUIDED
+  REQUIRED
 }
 
 enum ExecutionStatus {
@@ -229,6 +263,7 @@ model User {
   workspaces Workspace[]
   executionRequests ExecutionRequest[]
   judgeSubmissions JudgeSubmission[]
+  quizAttempts QuizAttempt[]
   projectSubmissions ProjectSubmission[]
   createdPracticeProblems PracticeProblem[] @relation("PracticeProblemAuthor")
   practiceProgress PracticeProgress[]
@@ -381,6 +416,7 @@ model Lesson {
   codeSnapshots CodeSnapshot[]
   workspaces Workspace[]
   codeAlongConfig VideoCodeAlongConfig?
+  quiz Quiz?
 
   @@unique([moduleId, position])
   @@index([moduleId])
@@ -482,6 +518,116 @@ model LearningActivity {
   @@map("learning_activities")
 }
 
+model Quiz {
+  id                    String   @id @default(uuid()) @db.Uuid
+  lessonId              String   @unique @db.Uuid
+  title                 String
+  instructions          String?
+  passScore             Decimal  @default(70) @db.Decimal(5, 2)
+  shuffleQuestions      Boolean  @default(false)
+  shuffleOptions        Boolean  @default(false)
+  showResultImmediately Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  lesson    Lesson         @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  questions QuizQuestion[]
+  attempts  QuizAttempt[]
+
+  @@index([lessonId])
+  @@map("quizzes")
+}
+
+model QuizQuestion {
+  id          String           @id @default(uuid()) @db.Uuid
+  quizId      String           @db.Uuid
+  type        QuizQuestionType
+  prompt      String
+  explanation String?
+  points      Decimal          @default(1) @db.Decimal(8, 2)
+  position    Int
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  quiz     Quiz                @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  options  QuizOption[]
+  answers  QuizAttemptAnswer[]
+
+  @@unique([quizId, position])
+  @@index([quizId])
+  @@map("quiz_questions")
+}
+
+model QuizOption {
+  id         String   @id @default(uuid()) @db.Uuid
+  questionId String   @db.Uuid
+  text       String
+  isCorrect  Boolean  @default(false)
+  position   Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  question QuizQuestion               @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  selectedBy QuizAttemptAnswerOption[]
+
+  @@unique([questionId, position])
+  @@index([questionId])
+  @@map("quiz_options")
+}
+
+model QuizAttempt {
+  id          String            @id @default(uuid()) @db.Uuid
+  quizId      String            @db.Uuid
+  userId      String            @db.Uuid
+  status      QuizAttemptStatus @default(IN_PROGRESS)
+  startedAt   DateTime          @default(now())
+  submittedAt DateTime?
+  score       Decimal?          @db.Decimal(8, 2)
+  maxScore    Decimal?          @db.Decimal(8, 2)
+  percentage  Decimal?          @db.Decimal(5, 2)
+  passed      Boolean?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  quiz    Quiz                @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  user    User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  answers QuizAttemptAnswer[]
+
+  @@index([quizId, userId, startedAt])
+  @@index([userId, status])
+  @@map("quiz_attempts")
+}
+
+model QuizAttemptAnswer {
+  id         String   @id @default(uuid()) @db.Uuid
+  attemptId  String   @db.Uuid
+  questionId String   @db.Uuid
+  isCorrect  Boolean?
+  scoreEarned Decimal? @db.Decimal(8, 2)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  attempt QuizAttempt               @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question QuizQuestion             @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  selectedOptions QuizAttemptAnswerOption[]
+
+  @@unique([attemptId, questionId])
+  @@index([questionId])
+  @@map("quiz_attempt_answers")
+}
+
+model QuizAttemptAnswerOption {
+  answerId String @db.Uuid
+  optionId String @db.Uuid
+
+  answer QuizAttemptAnswer @relation(fields: [answerId], references: [id], onDelete: Cascade)
+  option QuizOption        @relation(fields: [optionId], references: [id], onDelete: Cascade)
+
+  @@id([answerId, optionId])
+  @@index([optionId])
+  @@map("quiz_attempt_answer_options")
+}
+
 model StoredObject {
   id          String   @id @default(uuid()) @db.Uuid
   bucket      String
@@ -528,10 +674,47 @@ model VideoAsset {
   progress      VideoProgress[]
   checkpoints   VideoCheckpoint[]
   codeSnapshots CodeSnapshot[]
+  transcripts   VideoTranscript[]
 
   @@index([status])
   @@index([createdByUserId])
   @@map("video_assets")
+}
+
+model VideoTranscript {
+  id           String           @id @default(uuid()) @db.Uuid
+  videoAssetId String           @db.Uuid
+  language     String
+  source       TranscriptSource
+  status       TranscriptStatus @default(DRAFT)
+  title        String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  videoAsset VideoAsset               @relation(fields: [videoAssetId], references: [id], onDelete: Cascade)
+  segments   VideoTranscriptSegment[]
+
+  @@unique([videoAssetId, language])
+  @@index([videoAssetId, status])
+  @@index([language])
+  @@map("video_transcripts")
+}
+
+model VideoTranscriptSegment {
+  id           String   @id @default(uuid()) @db.Uuid
+  transcriptId String   @db.Uuid
+  order        Int
+  startTimeMs  Int
+  endTimeMs    Int
+  text         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  transcript VideoTranscript @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
+
+  @@unique([transcriptId, order])
+  @@index([transcriptId, startTimeMs])
+  @@map("video_transcript_segments")
 }
 
 model VideoProgress {
@@ -561,19 +744,26 @@ model VideoProgress {
 model VideoCheckpoint {
   id               String              @id @default(uuid()) @db.Uuid
   lessonId         String              @db.Uuid
-  videoAssetId     String              @db.Uuid
-  timestampSeconds Int
+  videoAssetId     String?             @db.Uuid
+  timestampSeconds Int                 @default(0)
   type             VideoCheckpointType
   title            String
   description      String?
   required         Boolean             @default(false)
   pauseVideo       Boolean             @default(true)
+  practiceEnabled  Boolean             @default(false)
+  practiceVerificationMode VideoPracticeVerificationMode @default(NONE)
+  practiceBehavior VideoPracticeBehavior @default(GUIDED)
+  practiceSnapshotId String?            @db.Uuid
+  practiceTargetFilePath String?
+  practiceTargetStartLine Int?
+  practiceTargetEndLine Int?
   position         Int                 @default(0)
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
 
   lesson     Lesson               @relation(fields: [lessonId], references: [id], onDelete: Cascade)
-  videoAsset VideoAsset           @relation(fields: [videoAssetId], references: [id], onDelete: Cascade)
+  videoAsset VideoAsset?          @relation(fields: [videoAssetId], references: [id], onDelete: Cascade)
   progress   CheckpointProgress[]
   workspaces Workspace[]
   codingConfig CodingCheckpointConfig?

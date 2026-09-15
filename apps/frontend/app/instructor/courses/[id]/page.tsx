@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Archive,
@@ -15,6 +15,7 @@ import {
   Video as VideoIcon,
   Code2,
   FolderGit2,
+  Trash2,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
@@ -42,6 +43,9 @@ import { VideoUploadStudio } from '../../../../features/instructor/components/vi
 import { CodeAlongStudio } from '../../../../features/instructor/components/code-along-studio';
 import {
   type CourseDetail,
+  type InstructorCodingConfigResponse,
+  type InstructorQuiz,
+  type InstructorQuizQuestion,
   type ProjectCheckpointConfigResponse,
   type ProjectRubricCriterion,
   type VideoCheckpoint,
@@ -866,6 +870,49 @@ function InstructorCodingLessonPanel({
   const [description, setDescription] = useState(initialDescription ?? '');
   const [language, setLanguage] = useState('javascript');
   const [entryFile, setEntryFile] = useState('index.js');
+  const [passScore, setPassScore] = useState(70);
+  const [timeLimitMs, setTimeLimitMs] = useState(5000);
+  const [memoryLimitMb, setMemoryLimitMb] = useState(128);
+  const [scoringMode, setScoringMode] = useState<'WEIGHTED' | 'ALL_OR_NOTHING'>('WEIGHTED');
+  const [starterFiles, setStarterFiles] = useState<Array<{ path: string; content: string }>>([
+    { path: 'index.js', content: 'function solution() {\n  // TODO: implement\n}\n\nmodule.exports = { solution };\n' },
+  ]);
+  const [testCases, setTestCases] = useState<
+    Array<{ name: string; visibility: 'PUBLIC' | 'HIDDEN'; input: string; expectedOutput: string; weight: number }>
+  >([
+    { name: 'Sample Test Case', visibility: 'PUBLIC', input: '', expectedOutput: '', weight: 50 },
+    { name: 'Hidden Verification Test', visibility: 'HIDDEN', input: '', expectedOutput: '', weight: 50 },
+  ]);
+
+  useQuery({
+    queryKey: ['instructor-coding-config', lessonId],
+    queryFn: async () => {
+      const res = await requestJson<InstructorCodingConfigResponse>(`/instructor/lessons/${lessonId}/coding`);
+      if (res.config) {
+        setLanguage(res.config.language);
+        setEntryFile(res.config.entryFile);
+        setPassScore(res.config.passScore);
+        setTimeLimitMs(res.config.timeLimitMs);
+        setMemoryLimitMb(res.config.memoryLimitMb);
+        setScoringMode(res.config.scoringMode);
+        if (res.config.starterFiles && res.config.starterFiles.length > 0) {
+          setStarterFiles(res.config.starterFiles.map((f) => ({ path: f.path, content: f.content })));
+        }
+        if (res.config.testCases && res.config.testCases.length > 0) {
+          setTestCases(
+            res.config.testCases.map((tc) => ({
+              name: tc.name,
+              visibility: tc.visibility,
+              input: tc.input,
+              expectedOutput: tc.expectedOutput,
+              weight: tc.weight,
+            })),
+          );
+        }
+      }
+      return res;
+    },
+  });
 
   const saveDetails = useMutation({
     mutationFn: async () => {
@@ -876,33 +923,69 @@ function InstructorCodingLessonPanel({
           description: description.trim(),
         }),
       });
-      // Optionally update code-along settings if configured
-      await requestJson(`/instructor/lessons/${lessonId}/code-along`, {
+      await requestJson(`/instructor/lessons/${lessonId}/coding`, {
         method: 'PUT',
         body: JSON.stringify({
           language,
-          entryFile,
+          entryFile: entryFile.trim(),
+          passScore: Number(passScore),
+          timeLimitMs: Number(timeLimitMs),
+          memoryLimitMb: Number(memoryLimitMb),
+          scoringMode,
+          starterFiles,
+          testCases,
         }),
-      }).catch(() => {
-        // Silently continue if code-along config is not present for non-video coding lesson
       });
     },
     onSuccess: async () => {
-      toast.success('Coding exercise updated successfully');
+      toast.success('Coding exercise and test suites saved successfully');
       await queryClient.invalidateQueries({ queryKey: ['instructor-course', courseId] });
+      await queryClient.invalidateQueries({ queryKey: ['instructor-coding-config', lessonId] });
     },
     onError: (err) => {
       toast.error('Failed to update coding exercise', err instanceof Error ? err.message : undefined);
     },
   });
 
+  const handleAddStarterFile = () => {
+    setStarterFiles((prev) => [...prev, { path: `file_${prev.length + 1}.js`, content: '' }]);
+  };
+
+  const handleRemoveStarterFile = (index: number) => {
+    if (starterFiles.length <= 1) {
+      toast.warning('At least one starter file is required');
+      return;
+    }
+    setStarterFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleAddTestCase = (visibility: 'PUBLIC' | 'HIDDEN') => {
+    setTestCases((prev) => [
+      ...prev,
+      {
+        name: `${visibility === 'PUBLIC' ? 'Public' : 'Hidden'} Test #${prev.length + 1}`,
+        visibility,
+        input: '',
+        expectedOutput: '',
+        weight: 10,
+      },
+    ]);
+  };
+
+  const handleRemoveTestCase = (index: number) => {
+    setTestCases((prev) => prev.filter((_, i) => i !== index));
+  };
+
   return (
-    <Card className="border-primary/30 p-4 space-y-4">
-      <div className="flex items-center justify-between">
+    <Card className="border-primary/30 p-5 space-y-6">
+      <div className="flex items-center justify-between border-b border-border pb-3">
         <div>
-          <h4 className="text-sm font-bold text-foreground">Coding Exercise Studio</h4>
+          <h4 className="text-sm font-bold text-foreground flex items-center gap-2">
+            <Code2 className="h-4 w-4 text-primary" />
+            <span>Coding Exercise Authoring Studio</span>
+          </h4>
           <p className="text-xs text-muted-foreground">
-            Configure the coding task statement, instructions, and workspace environment for learners.
+            Configure challenge statement, sandbox execution constraints, starter files, and grading test suites.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -915,56 +998,279 @@ function InstructorCodingLessonPanel({
             disabled={!title.trim() || saveDetails.isPending}
             onClick={() => saveDetails.mutate()}
           >
-            Save Exercise
+            Save Exercise & Tests
           </Button>
         </div>
       </div>
 
-      <div className="space-y-3">
-        <div>
-          <label className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
-            Lesson Title
-          </label>
-          <Input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Exercise title"
-          />
-        </div>
-
-        <div>
-          <label className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
-            Task Description & Instructions
-          </label>
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Describe the coding challenge, requirements, input/output specifications, and constraints..."
-            className="w-full min-h-[140px] rounded-lg border border-border bg-background p-3 text-xs font-mono text-foreground focus:outline-hidden focus:ring-2 focus:ring-primary"
-          />
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2">
+      <div className="space-y-4">
+        {/* Basic Exercise Info */}
+        <div className="grid gap-4">
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
-              Programming Language
-            </label>
-            <Select value={language} onChange={(e) => setLanguage(e.target.value)}>
-              <option value="javascript">JavaScript (Node.js)</option>
-              <option value="typescript">TypeScript</option>
-              <option value="python">Python</option>
-              <option value="go">Go</option>
-            </Select>
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
-              Entry File
+              Exercise Title
             </label>
             <Input
-              value={entryFile}
-              onChange={(e) => setEntryFile(e.target.value)}
-              placeholder="e.g. index.js, main.py"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="e.g. Validate a Username"
             />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
+              Task Description & Guidelines (Markdown supported)
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Provide clear rules, constraints, examples, and expected return format..."
+              className="w-full min-h-[140px] rounded-lg border border-border bg-background p-3 text-xs font-mono text-foreground focus:outline-hidden focus:ring-2 focus:ring-primary"
+            />
+          </div>
+        </div>
+
+        {/* Runtime & Sandbox Limits */}
+        <div className="border border-border rounded-lg p-4 bg-muted/20 space-y-3">
+          <h5 className="text-xs font-bold uppercase tracking-wider text-foreground">
+            Execution Sandbox & Evaluation Configuration
+          </h5>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+                Language
+              </label>
+              <Select value={language} onChange={(e) => setLanguage(e.target.value)}>
+                <option value="javascript">JavaScript (Node.js)</option>
+                <option value="typescript">TypeScript</option>
+              </Select>
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+                Entry File
+              </label>
+              <Input
+                value={entryFile}
+                onChange={(e) => setEntryFile(e.target.value)}
+                placeholder="index.js"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+                Pass Score (0 - 100)
+              </label>
+              <Input
+                type="number"
+                value={passScore}
+                onChange={(e) => setPassScore(Number(e.target.value))}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+                Scoring Mode
+              </label>
+              <Select
+                value={scoringMode}
+                onChange={(e) => setScoringMode(e.target.value as 'WEIGHTED' | 'ALL_OR_NOTHING')}
+              >
+                <option value="WEIGHTED">Weighted by Test Weights</option>
+                <option value="ALL_OR_NOTHING">All or Nothing</option>
+              </Select>
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+                Time Limit (ms)
+              </label>
+              <Input
+                type="number"
+                value={timeLimitMs}
+                onChange={(e) => setTimeLimitMs(Number(e.target.value))}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+                Memory Limit (MB)
+              </label>
+              <Input
+                type="number"
+                value={memoryLimitMb}
+                onChange={(e) => setMemoryLimitMb(Number(e.target.value))}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Starter Workspace Files */}
+        <div className="border border-border rounded-lg p-4 bg-muted/20 space-y-3">
+          <div className="flex items-center justify-between">
+            <h5 className="text-xs font-bold uppercase tracking-wider text-foreground">
+              Starter Workspace Files
+            </h5>
+            <Button size="sm" variant="secondary" onClick={handleAddStarterFile} className="text-xs">
+              <Plus className="h-3.5 w-3.5 mr-1" /> Add File
+            </Button>
+          </div>
+          <div className="space-y-3">
+            {starterFiles.map((file, fIdx) => (
+              <div key={fIdx} className="rounded-md border border-border bg-card p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <Input
+                    value={file.path}
+                    onChange={(e) => {
+                      const newPath = e.target.value;
+                      setStarterFiles((prev) =>
+                        prev.map((item, idx) => (idx === fIdx ? { ...item, path: newPath } : item)),
+                      );
+                    }}
+                    placeholder="File path (e.g. index.js)"
+                    className="max-w-xs font-mono text-xs"
+                  />
+                  {starterFiles.length > 1 && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleRemoveStarterFile(fIdx)}
+                      className="text-destructive hover:text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+                <textarea
+                  value={file.content}
+                  onChange={(e) => {
+                    const newContent = e.target.value;
+                    setStarterFiles((prev) =>
+                      prev.map((item, idx) => (idx === fIdx ? { ...item, content: newContent } : item)),
+                    );
+                  }}
+                  placeholder="Starter template code for student workspace..."
+                  className="w-full min-h-[90px] rounded border border-border bg-muted/40 p-2.5 text-xs font-mono text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Test Cases */}
+        <div className="border border-border rounded-lg p-4 bg-muted/20 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h5 className="text-xs font-bold uppercase tracking-wider text-foreground">
+                Judge Automated Test Cases ({testCases.length})
+              </h5>
+              <p className="text-[11px] text-muted-foreground">
+                Public tests provide feedback on student runs. Hidden tests are kept confidential to grade solutions.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="secondary" onClick={() => handleAddTestCase('PUBLIC')} className="text-xs">
+                <Plus className="h-3.5 w-3.5 mr-1" /> Public Test
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => handleAddTestCase('HIDDEN')} className="text-xs">
+                <Plus className="h-3.5 w-3.5 mr-1" /> Hidden Test
+              </Button>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {testCases.map((tc, tcIdx) => (
+              <div key={tcIdx} className="rounded-md border border-border bg-card p-3 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 pb-2">
+                  <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+                    <Badge tone={tc.visibility === 'PUBLIC' ? 'info' : 'warning'} className="text-[10px]">
+                      {tc.visibility}
+                    </Badge>
+                    <Input
+                      value={tc.name}
+                      onChange={(e) => {
+                        const newName = e.target.value;
+                        setTestCases((prev) =>
+                          prev.map((item, idx) => (idx === tcIdx ? { ...item, name: newName } : item)),
+                        );
+                      }}
+                      placeholder="Test case name"
+                      className="text-xs font-semibold"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-1.5 text-xs">
+                      <span className="text-muted-foreground">Weight:</span>
+                      <Input
+                        type="number"
+                        value={tc.weight}
+                        onChange={(e) => {
+                          const newWeight = Number(e.target.value);
+                          setTestCases((prev) =>
+                            prev.map((item, idx) => (idx === tcIdx ? { ...item, weight: newWeight } : item)),
+                          );
+                        }}
+                        className="w-16 text-xs"
+                      />
+                    </div>
+
+                    <Select
+                      value={tc.visibility}
+                      onChange={(e) => {
+                        const newVis = e.target.value as 'PUBLIC' | 'HIDDEN';
+                        setTestCases((prev) =>
+                          prev.map((item, idx) => (idx === tcIdx ? { ...item, visibility: newVis } : item)),
+                        );
+                      }}
+                      className="text-xs"
+                    >
+                      <option value="PUBLIC">PUBLIC</option>
+                      <option value="HIDDEN">HIDDEN</option>
+                    </Select>
+
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleRemoveTestCase(tcIdx)}
+                      className="text-destructive hover:text-destructive p-1"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+                      Input (stdin)
+                    </label>
+                    <textarea
+                      value={tc.input}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setTestCases((prev) =>
+                          prev.map((item, idx) => (idx === tcIdx ? { ...item, input: val } : item)),
+                        );
+                      }}
+                      placeholder="Input passed to stdin..."
+                      className="w-full min-h-[60px] rounded border border-border bg-muted/40 p-2 text-xs font-mono text-foreground focus:outline-hidden"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+                      Expected Output (stdout)
+                    </label>
+                    <textarea
+                      value={tc.expectedOutput}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setTestCases((prev) =>
+                          prev.map((item, idx) => (idx === tcIdx ? { ...item, expectedOutput: val } : item)),
+                        );
+                      }}
+                      placeholder="Expected output match..."
+                      className="w-full min-h-[60px] rounded border border-border bg-muted/40 p-2 text-xs font-mono text-foreground focus:outline-hidden"
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -1074,32 +1380,126 @@ function InstructorQuizLessonPanel({
   const queryClient = useQueryClient();
   const toast = useToast();
   const [title, setTitle] = useState(initialTitle);
+  const [instructions, setInstructions] = useState('');
+  const [passScore, setPassScore] = useState(70);
+  const [shuffleQuestions, setShuffleQuestions] = useState(false);
+  const [shuffleOptions, setShuffleOptions] = useState(false);
+  const [showResultImmediately, setShowResultImmediately] = useState(true);
+  const [newQuestionType, setNewQuestionType] = useState<'SINGLE_CHOICE' | 'MULTIPLE_CHOICE'>('SINGLE_CHOICE');
+  const [newQuestionPrompt, setNewQuestionPrompt] = useState('');
 
-  const saveDetails = useMutation({
-    mutationFn: () =>
-      requestJson(`/instructor/lessons/${lessonId}`, {
+  const quiz = useQuery({
+    queryKey: ['instructor', 'quiz', lessonId],
+    queryFn: () => requestJson<{ readonly quiz: InstructorQuiz | null }>(`/instructor/lessons/${lessonId}/quiz`),
+  });
+
+  const currentQuiz = quiz.data?.quiz ?? null;
+
+  useEffect(() => {
+    if (!currentQuiz) {
+      return;
+    }
+
+    setTitle(currentQuiz.title);
+    setInstructions(currentQuiz.instructions ?? '');
+    setPassScore(currentQuiz.passScore);
+    setShuffleQuestions(currentQuiz.shuffleQuestions);
+    setShuffleOptions(currentQuiz.shuffleOptions);
+    setShowResultImmediately(currentQuiz.showResultImmediately);
+  }, [currentQuiz]);
+
+  const saveSettings = useMutation({
+    mutationFn: async () => {
+      await requestJson(`/instructor/lessons/${lessonId}`, {
         method: 'PATCH',
+        body: JSON.stringify({ title: title.trim() }),
+      });
+      return requestJson<{ readonly quiz: InstructorQuiz }>(`/instructor/lessons/${lessonId}/quiz`, {
+        method: 'PUT',
         body: JSON.stringify({
           title: title.trim(),
+          instructions: instructions.trim() || null,
+          passScore,
+          shuffleQuestions,
+          shuffleOptions,
+          showResultImmediately,
         }),
-      }),
+      });
+    },
     onSuccess: async () => {
       toast.success('Quiz lesson updated');
-      await queryClient.invalidateQueries({ queryKey: ['instructor-course', courseId] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['instructor-course', courseId] }),
+        queryClient.invalidateQueries({ queryKey: ['instructor', 'quiz', lessonId] }),
+      ]);
     },
     onError: (err) => {
       toast.error('Failed to update quiz lesson', err instanceof Error ? err.message : undefined);
     },
   });
 
+  const addQuestion = useMutation({
+    mutationFn: async () => {
+      const quizId = currentQuiz?.id;
+      if (!quizId) {
+        throw new Error('Save quiz settings before adding questions');
+      }
+
+      return requestJson(`/instructor/quizzes/${quizId}/questions`, {
+        method: 'POST',
+        body: JSON.stringify({
+          type: newQuestionType,
+          prompt: newQuestionPrompt.trim(),
+          points: 1,
+          options: newQuestionType === 'SINGLE_CHOICE'
+            ? [
+                { text: 'Option A', isCorrect: true },
+                { text: 'Option B', isCorrect: false },
+              ]
+            : [
+                { text: 'Option A', isCorrect: true },
+                { text: 'Option B', isCorrect: false },
+                { text: 'Option C', isCorrect: true },
+              ],
+        }),
+      });
+    },
+    onSuccess: async () => {
+      setNewQuestionPrompt('');
+      await queryClient.invalidateQueries({ queryKey: ['instructor', 'quiz', lessonId] });
+    },
+    onError: (err) => toast.error('Failed to add question', err instanceof Error ? err.message : undefined),
+  });
+
+  const reorderQuestions = useMutation({
+    mutationFn: (orderedIds: readonly string[]) =>
+      requestJson(`/instructor/quizzes/${currentQuiz?.id}/questions/reorder`, {
+        method: 'POST',
+        body: JSON.stringify({ orderedIds }),
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['instructor', 'quiz', lessonId] });
+    },
+  });
+
+  function moveQuestion(questionId: string, direction: -1 | 1) {
+    const questions = currentQuiz?.questions ?? [];
+    const index = questions.findIndex((question) => question.id === questionId);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= questions.length) return;
+    const ordered = [...questions];
+    const [item] = ordered.splice(index, 1);
+    if (!item) return;
+    ordered.splice(target, 0, item);
+    reorderQuestions.mutate(ordered.map((question) => question.id));
+  }
+
   return (
-    <Card className="border-amber-500/30 bg-amber-500/5 p-4 space-y-4">
+    <Card className="border-primary/20 bg-card p-4 space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h4 className="text-sm font-bold text-foreground">Quiz Lesson (Roadmap)</h4>
-          <p className="text-xs text-muted-foreground">
-            Interactive multiple-choice quizzes are part of the upcoming assessment milestone.
-          </p>
+          <h4 className="text-sm font-bold text-foreground">Quiz Settings</h4>
+          <p className="text-xs text-muted-foreground">Configure questions, passing score, and result disclosure.</p>
         </div>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="secondary" onClick={onClose}>
@@ -1107,25 +1507,238 @@ function InstructorQuizLessonPanel({
           </Button>
           <Button
             size="sm"
-            isLoading={saveDetails.isPending}
-            disabled={!title.trim() || saveDetails.isPending}
-            onClick={() => saveDetails.mutate()}
+            isLoading={saveSettings.isPending}
+            disabled={!title.trim() || saveSettings.isPending}
+            onClick={() => saveSettings.mutate()}
           >
-            Save Title
+            Save Quiz
           </Button>
         </div>
       </div>
 
+      <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_140px]">
+        <div>
+          <label className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">Quiz Title</label>
+          <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Quiz title" />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">Passing Score</label>
+          <Input
+            type="number"
+            min={0}
+            max={100}
+            value={passScore}
+            onChange={(e) => setPassScore(Number(e.target.value))}
+          />
+        </div>
+      </div>
+
       <div>
-        <label className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
-          Lesson Title
-        </label>
-        <Input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Quiz title"
+        <label className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">Instructions</label>
+        <textarea
+          className="min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground outline-hidden focus:ring-2 focus:ring-ring"
+          value={instructions}
+          onChange={(e) => setInstructions(e.target.value)}
+          placeholder="Instructions shown to students before they start the quiz."
         />
       </div>
+
+      <div className="flex flex-wrap gap-4 text-sm">
+        <label className="flex items-center gap-2">
+          <Checkbox checked={shuffleQuestions} onChange={(event) => setShuffleQuestions(event.target.checked)} />
+          Shuffle questions
+        </label>
+        <label className="flex items-center gap-2">
+          <Checkbox checked={shuffleOptions} onChange={(event) => setShuffleOptions(event.target.checked)} />
+          Shuffle options
+        </label>
+        <label className="flex items-center gap-2">
+          <Checkbox checked={showResultImmediately} onChange={(event) => setShowResultImmediately(event.target.checked)} />
+          Show result immediately
+        </label>
+      </div>
+
+      <div className="border-t border-border pt-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h5 className="text-sm font-semibold text-foreground">Questions</h5>
+          <Badge tone={currentQuiz && currentQuiz.questions.length > 0 ? 'success' : 'warning'}>
+            {currentQuiz?.questions.length ?? 0}
+          </Badge>
+        </div>
+
+        {quiz.isLoading ? <PageSkeleton /> : null}
+
+        <div className="space-y-3">
+          {currentQuiz?.questions.map((question, index) => (
+            <InstructorQuizQuestionEditor
+              key={question.id}
+              quizId={currentQuiz.id}
+              lessonId={lessonId}
+              question={question}
+              index={index}
+              canMoveUp={index > 0}
+              canMoveDown={index < currentQuiz.questions.length - 1}
+              onMove={moveQuestion}
+            />
+          ))}
+        </div>
+
+        <div className="rounded-lg border border-dashed border-border p-3 space-y-3">
+          <div className="grid gap-3 md:grid-cols-[160px_minmax(0,1fr)_auto]">
+            <Select value={newQuestionType} onChange={(e) => setNewQuestionType(e.target.value as 'SINGLE_CHOICE' | 'MULTIPLE_CHOICE')}>
+              <option value="SINGLE_CHOICE">Single choice</option>
+              <option value="MULTIPLE_CHOICE">Multiple choice</option>
+            </Select>
+            <Input
+              value={newQuestionPrompt}
+              onChange={(e) => setNewQuestionPrompt(e.target.value)}
+              placeholder="Question prompt"
+            />
+            <Button
+              size="sm"
+              onClick={() => addQuestion.mutate()}
+              disabled={!newQuestionPrompt.trim() || !currentQuiz}
+              isLoading={addQuestion.isPending}
+            >
+              Add Question
+            </Button>
+          </div>
+          {!currentQuiz ? (
+            <p className="text-xs text-muted-foreground">Save quiz settings before adding questions.</p>
+          ) : null}
+        </div>
+      </div>
     </Card>
+  );
+}
+
+function InstructorQuizQuestionEditor({
+  quizId,
+  lessonId,
+  question,
+  index,
+  canMoveUp,
+  canMoveDown,
+  onMove,
+}: {
+  readonly quizId: string;
+  readonly lessonId: string;
+  readonly question: InstructorQuizQuestion;
+  readonly index: number;
+  readonly canMoveUp: boolean;
+  readonly canMoveDown: boolean;
+  readonly onMove: (questionId: string, direction: -1 | 1) => void;
+}) {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [type, setType] = useState(question.type);
+  const [prompt, setPrompt] = useState(question.prompt);
+  const [points, setPoints] = useState(question.points);
+  const [explanation, setExplanation] = useState(question.explanation ?? '');
+  const [options, setOptions] = useState(question.options.map((option) => ({ ...option })));
+
+  const saveQuestion = useMutation({
+    mutationFn: () =>
+      requestJson(`/instructor/quizzes/${quizId}/questions/${question.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          type,
+          prompt: prompt.trim(),
+          points,
+          explanation: explanation.trim() || null,
+          options: options.map((option, optionIndex) => ({
+            text: option.text,
+            isCorrect: option.isCorrect,
+            position: optionIndex + 1,
+          })),
+        }),
+      }),
+    onSuccess: async () => {
+      toast.success('Question saved');
+      await queryClient.invalidateQueries({ queryKey: ['instructor', 'quiz', lessonId] });
+    },
+    onError: (err) => toast.error('Failed to save question', err instanceof Error ? err.message : undefined),
+  });
+
+  const deleteQuestion = useMutation({
+    mutationFn: () => requestJson(`/instructor/quizzes/${quizId}/questions/${question.id}`, { method: 'DELETE' }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['instructor', 'quiz', lessonId] });
+    },
+    onError: (err) => toast.error('Failed to delete question', err instanceof Error ? err.message : undefined),
+  });
+
+  function setCorrect(optionIndex: number, checked: boolean) {
+    setOptions((current) =>
+      current.map((option, index) => ({
+        ...option,
+        isCorrect: type === 'SINGLE_CHOICE' ? index === optionIndex && checked : index === optionIndex ? checked : option.isCorrect,
+      })),
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-border/70 bg-muted/20 p-3 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs font-semibold uppercase text-muted-foreground">Question {index + 1}</span>
+        <div className="flex gap-1">
+          <Button size="sm" variant="secondary" disabled={!canMoveUp} onClick={() => onMove(question.id, -1)}>Up</Button>
+          <Button size="sm" variant="secondary" disabled={!canMoveDown} onClick={() => onMove(question.id, 1)}>Down</Button>
+          <Button size="sm" variant="danger" onClick={() => deleteQuestion.mutate()} isLoading={deleteQuestion.isPending}>
+            Delete
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-[170px_100px_minmax(0,1fr)]">
+        <Select value={type} onChange={(e) => setType(e.target.value as 'SINGLE_CHOICE' | 'MULTIPLE_CHOICE')}>
+          <option value="SINGLE_CHOICE">Single choice</option>
+          <option value="MULTIPLE_CHOICE">Multiple choice</option>
+        </Select>
+        <Input type="number" min={1} value={points} onChange={(e) => setPoints(Number(e.target.value))} />
+        <Input value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Question prompt" />
+      </div>
+
+      <div className="space-y-2">
+        {options.map((option, optionIndex) => (
+          <div key={option.id ?? optionIndex} className="grid gap-2 md:grid-cols-[24px_minmax(0,1fr)_auto]">
+            <Checkbox checked={option.isCorrect} onChange={(event) => setCorrect(optionIndex, event.target.checked)} />
+            <Input
+              value={option.text}
+              onChange={(e) => {
+                const text = e.target.value;
+                setOptions((current) => current.map((item, index) => index === optionIndex ? { ...item, text } : item));
+              }}
+            />
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={options.length <= 2}
+              onClick={() => setOptions((current) => current.filter((_option, index) => index !== optionIndex))}
+            >
+              Remove
+            </Button>
+          </div>
+        ))}
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => setOptions((current) => [...current, { id: `new-${Date.now()}`, text: '', isCorrect: false, position: current.length + 1 }])}
+        >
+          Add Option
+        </Button>
+      </div>
+
+      <textarea
+        className="min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground outline-hidden focus:ring-2 focus:ring-ring"
+        value={explanation}
+        onChange={(e) => setExplanation(e.target.value)}
+        placeholder="Explanation shown after submission"
+      />
+
+      <Button size="sm" onClick={() => saveQuestion.mutate()} isLoading={saveQuestion.isPending} disabled={!prompt.trim()}>
+        Save Question
+      </Button>
+    </div>
   );
 }

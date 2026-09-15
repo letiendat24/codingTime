@@ -10,22 +10,17 @@ import {
   Trash2,
   Edit2,
   Save,
-  Layers,
-  FileCode,
   Play,
   Copy,
-  FolderOpen,
   FilePlus,
   X,
-  Sparkles,
   Code2,
+  ClipboardCheck,
 } from 'lucide-react';
 import { Button } from '../../../design-system/components/button';
 import { Input } from '../../../design-system/components/input';
 import { Select } from '../../../design-system/components/select';
 import { Switch } from '../../../design-system/components/switch';
-import { Badge } from '../../../design-system/components/badge';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../../design-system/components/card';
 import { type CodeSnapshotDetail, requestJson } from '../../../lib/api';
 import { formatTime, parseTimeString, findPreviousSnapshot } from '../../../lib/video-learning';
 import { useTheme } from '../../../providers/theme-provider';
@@ -107,6 +102,10 @@ export function CodeAlongStudio({
   const [activeFilePath, setActiveFilePath] = useState('src/index.ts');
   const [newFilePathInput, setNewFilePathInput] = useState('');
   const [isAddingFile, setIsAddingFile] = useState(false);
+  const [practiceEnabled, setPracticeEnabled] = useState(false);
+  const [practiceInstruction, setPracticeInstruction] = useState('');
+  const [practiceVerificationMode, setPracticeVerificationMode] = useState<'NONE' | 'CODE_COMPARE' | 'TESTS'>('NONE');
+  const [practiceBehavior, setPracticeBehavior] = useState<'GUIDED' | 'REQUIRED'>('GUIDED');
 
   // Query existing snapshots
   const snapshotsQuery = useQuery({
@@ -145,23 +144,50 @@ export function CodeAlongStudio({
         files: files.map((f) => ({ path: f.path.trim(), content: f.content })),
       };
 
-      if (editingSnapshotId) {
-        return requestJson<{ readonly codeSnapshot: CodeSnapshotDetail }>(
+      const saved = editingSnapshotId
+        ? await requestJson<{ readonly codeSnapshot: CodeSnapshotDetail }>(
           `/instructor/code-snapshots/${editingSnapshotId}`,
           {
             method: 'PATCH',
             body: JSON.stringify(payload),
           },
+        )
+        : await requestJson<{ readonly codeSnapshot: CodeSnapshotDetail }>(
+          `/instructor/videos/${videoAssetId}/code-snapshots`,
+          {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          },
         );
+
+      if (practiceEnabled && !editingSnapshotId) {
+        const checkpoint = await requestJson<{ readonly checkpoint: { readonly id: string } }>(
+          `/instructor/videos/${videoAssetId}/checkpoints`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              timestampSeconds,
+              type: 'INFO',
+              title: snapshotTitle.trim() || `Practice at ${formatTime(timestampSeconds)}`,
+              description: practiceInstruction.trim() || null,
+              required: practiceBehavior === 'REQUIRED',
+              pauseVideo: false,
+            }),
+          },
+        );
+        await requestJson(`/instructor/checkpoints/${checkpoint.checkpoint.id}/practice-step`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            practiceEnabled: true,
+            practiceVerificationMode,
+            practiceBehavior,
+            practiceSnapshotId: saved.codeSnapshot.id,
+            practiceTargetFilePath: activeFilePath,
+          }),
+        });
       }
 
-      return requestJson<{ readonly codeSnapshot: CodeSnapshotDetail }>(
-        `/instructor/videos/${videoAssetId}/code-snapshots`,
-        {
-          method: 'POST',
-          body: JSON.stringify(payload),
-        },
-      );
+      return saved;
     },
     onSuccess: () => {
       setIsCreatingSnapshot(false);
@@ -193,6 +219,10 @@ export function CodeAlongStudio({
     setEditingSnapshotId(null);
     setSnapshotTimeString(formattedCurrentTime);
     setSnapshotTitle(`Milestone at ${formattedCurrentTime}`);
+    setPracticeEnabled(false);
+    setPracticeInstruction('');
+    setPracticeVerificationMode('NONE');
+    setPracticeBehavior('GUIDED');
 
     if (prevSnapshot && prevSnapshot.files.length > 0) {
       // Smart clone from previous milestone
@@ -213,6 +243,10 @@ export function CodeAlongStudio({
     setEditingSnapshotId(snap.id);
     setSnapshotTimeString(formatTime(snap.timestampSeconds));
     setSnapshotTitle(snap.title ?? '');
+    setPracticeEnabled(false);
+    setPracticeInstruction('');
+    setPracticeVerificationMode('NONE');
+    setPracticeBehavior('GUIDED');
 
     const snapFiles = snap.files.length > 0
       ? snap.files.map((f) => ({ path: f.path, content: f.content }))
@@ -280,426 +314,383 @@ export function CodeAlongStudio({
   const previousSnapshot = findPreviousSnapshot(parseTimeString(snapshotTimeString), snapshots);
 
   return (
-    <Card className="border-primary/20 bg-card shadow-sm">
-      <CardHeader className="border-b bg-muted/20 pb-4">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-start gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary mt-0.5">
-              <Camera className="h-5 w-5" />
-            </div>
-            <div>
-              <CardTitle className="text-base">Code-Along Experience</CardTitle>
-              <CardDescription>
-                Capture instructor project states across video timestamps. Students can follow along, inspect milestone diffs, or sync code.
-              </CardDescription>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <label className="flex items-center gap-2 text-xs font-semibold text-foreground cursor-pointer">
-              <span>Enable Code-Along</span>
-              <Switch
-                checked={enabled}
-                onCheckedChange={(checked) => {
-                  setEnabled(checked);
-                  saveConfig.mutate(checked);
-                }}
-              />
-            </label>
-          </div>
-        </div>
-      </CardHeader>
-
-      <CardContent className="p-5 space-y-6">
-        {/* Language & Entry File Configuration */}
-        <div className="grid gap-4 sm:grid-cols-2 rounded-lg border bg-muted/30 p-4">
-          <div>
-            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Primary Language
-            </label>
-            <Select
-              value={language}
-              onChange={(e) => {
-                setLanguage(e.target.value);
-                saveConfig.mutate(enabled);
-              }}
-              options={[
-                { label: 'TypeScript / JavaScript', value: 'typescript' },
-                { label: 'Python 3', value: 'python' },
-                { label: 'Go', value: 'go' },
-                { label: 'Rust', value: 'rust' },
-                { label: 'C++', value: 'cpp' },
-                { label: 'Java', value: 'java' },
-              ]}
-            />
-          </div>
-          <div>
-            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Default Entry File
-            </label>
-            <Input
-              value={entryFile}
-              onChange={(e) => {
-                setEntryFile(e.target.value);
-                saveConfig.mutate(enabled);
-              }}
-              placeholder="e.g. src/index.ts or main.py"
-              className="font-mono text-sm"
-            />
-          </div>
+    <div className="space-y-6 pt-4 border-t border-border/60">
+      {/* Code Along Header & Toggle */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
+            <Camera className="h-4 w-4 text-foreground" />
+            <span>Code-Along Milestone Studio</span>
+          </h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Capture instructor code milestones across video timestamps for interactive student sync.
+          </p>
         </div>
 
-        {/* Studio Action & Snapshot Timeline Header */}
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <Layers className="h-4 w-4 text-primary" />
-              <h4 className="text-sm font-bold text-foreground">Timeline Milestones</h4>
-              <Badge variant="outline" className="text-xs">
-                {snapshots.length} Milestones
-              </Badge>
-            </div>
+        <label className="flex items-center gap-2.5 text-xs font-semibold text-foreground cursor-pointer bg-muted/50 px-3 py-1.5 rounded-lg border border-border/70">
+          <span>Enable Code-Along</span>
+          <Switch
+            checked={enabled}
+            onCheckedChange={(checked) => {
+              setEnabled(checked);
+              saveConfig.mutate(checked);
+            }}
+          />
+        </label>
+      </div>
 
-            {!isCreatingSnapshot && (
+      {/* Language & Entry File Configuration */}
+      <div className="grid gap-4 sm:grid-cols-2 p-4 rounded-xl border border-border/70 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
+        <div>
+          <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
+            Language
+          </label>
+          <Select
+            value={language}
+            onChange={(e) => {
+              setLanguage(e.target.value);
+              saveConfig.mutate(enabled);
+            }}
+            options={[
+              { label: 'TypeScript / JavaScript', value: 'typescript' },
+              { label: 'Python 3', value: 'python' },
+              { label: 'Go', value: 'go' },
+              { label: 'Rust', value: 'rust' },
+              { label: 'C++', value: 'cpp' },
+              { label: 'Java', value: 'java' },
+            ]}
+          />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
+            Entry File
+          </label>
+          <Input
+            value={entryFile}
+            onChange={(e) => {
+              setEntryFile(e.target.value);
+              saveConfig.mutate(enabled);
+            }}
+            placeholder="e.g. src/index.ts or main.py"
+            className="font-mono text-xs"
+          />
+        </div>
+      </div>
+
+      {/* Timeline Milestones Section */}
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              Instructor Timeline
+            </h4>
+            <span className="inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
+              {snapshots.length} milestones
+            </span>
+          </div>
+
+          {!isCreatingSnapshot && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={startCreatingSnapshot}
+              leftIcon={<Plus className="h-3.5 w-3.5" />}
+            >
+              Add Milestone ({formatTime(currentVideoTimeSeconds)})
+            </Button>
+          )}
+        </div>
+
+        {/* Snapshot Editor (when active) */}
+        {isCreatingSnapshot && (
+          <div className="rounded-xl border border-border/80 bg-card p-5 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 pb-3">
+              <div className="flex items-center gap-2">
+                <Code2 className="h-4 w-4 text-foreground" />
+                <h5 className="text-xs font-bold uppercase tracking-wider text-foreground">
+                  {editingSnapshotId ? 'Edit Milestone Snapshot' : 'Capture Milestone Snapshot'}
+                </h5>
+              </div>
+
               <Button
                 size="sm"
-                onClick={startCreatingSnapshot}
-                leftIcon={<Camera className="h-4 w-4" />}
-                className="shadow-xs"
+                variant="ghost"
+                onClick={() => {
+                  setIsCreatingSnapshot(false);
+                  setEditingSnapshotId(null);
+                }}
               >
-                Capture Milestone at Current Time ({formatTime(currentVideoTimeSeconds)})
+                <X className="h-3.5 w-3.5 mr-1" />
+                Cancel
               </Button>
-            )}
-          </div>
+            </div>
 
-          {/* Integrated Multi-File Snapshot Authoring Workspace */}
-          {isCreatingSnapshot && (
-            <Card className="border-primary/40 bg-card shadow-md animate-in fade-in-0 duration-200">
-              <CardHeader className="border-b bg-muted/20 py-3 px-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
-                      <Code2 className="h-4 w-4" />
-                    </div>
-                    <div>
-                      <h5 className="text-sm font-bold text-foreground">
-                        {editingSnapshotId ? 'Edit Milestone Snapshot' : 'Capture Milestone Snapshot'}
-                      </h5>
-                      <p className="text-[11px] text-muted-foreground">
-                        Save project files and instructor code for this video timestamp.
-                      </p>
-                    </div>
-                  </div>
-
+            {/* Metadata Controls */}
+            <div className="grid gap-3 sm:grid-cols-12 items-end">
+              <div className="sm:col-span-4">
+                <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+                  Timestamp (mm:ss)
+                </label>
+                <div className="flex gap-1.5">
+                  <Input
+                    value={snapshotTimeString}
+                    onChange={(e) => setSnapshotTimeString(e.target.value)}
+                    placeholder="00:00"
+                    className="font-mono text-xs"
+                  />
                   <Button
                     size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      setIsCreatingSnapshot(false);
-                      setEditingSnapshotId(null);
-                    }}
+                    variant="secondary"
+                    type="button"
+                    onClick={() => setSnapshotTimeString(formatTime(currentVideoTimeSeconds))}
+                    className="shrink-0 text-xs px-2.5"
                   >
-                    <X className="h-4 w-4 mr-1" />
-                    Cancel
+                    <Clock className="h-3.5 w-3.5 mr-1" />
+                    Use Video
                   </Button>
                 </div>
-              </CardHeader>
+              </div>
 
-              <CardContent className="p-4 space-y-4">
-                {/* Milestone Metadata Controls */}
-                <div className="grid gap-3 sm:grid-cols-12 items-end">
-                  <div className="sm:col-span-4">
-                    <label className="mb-1 block text-xs font-semibold text-muted-foreground">
-                      Video Timestamp (mm:ss or hh:mm:ss)
-                    </label>
-                    <div className="flex gap-1.5">
+              <div className="sm:col-span-8">
+                <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+                  Milestone Title
+                </label>
+                <Input
+                  value={snapshotTitle}
+                  onChange={(e) => setSnapshotTitle(e.target.value)}
+                  placeholder="e.g. User Model and Schema"
+                  className="text-xs"
+                />
+              </div>
+            </div>
+
+            {/* Editor & File Management */}
+            <div className="space-y-3 pt-2">
+              <div className="rounded-lg border border-border/70 bg-muted/20 p-3">
+                <label className="flex items-center gap-2 text-xs font-semibold text-foreground">
+                  <Switch checked={practiceEnabled} onCheckedChange={setPracticeEnabled} />
+                  <ClipboardCheck className="h-3.5 w-3.5" />
+                  <span>Enable Practice Step</span>
+                </label>
+                {practiceEnabled ? (
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <div className="sm:col-span-2">
+                      <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Instruction</label>
                       <Input
-                        value={snapshotTimeString}
-                        onChange={(e) => setSnapshotTimeString(e.target.value)}
-                        placeholder="00:00"
-                        className="font-mono text-xs"
+                        value={practiceInstruction}
+                        onChange={(event) => setPracticeInstruction(event.target.value)}
+                        placeholder="Implement the validation block"
+                        className="text-xs"
                       />
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        type="button"
-                        onClick={() => setSnapshotTimeString(formatTime(currentVideoTimeSeconds))}
-                        title="Use Current Video Player Time"
-                        className="shrink-0 text-xs px-2.5"
-                      >
-                        <Clock className="h-3.5 w-3.5 mr-1" />
-                        Use Video Time
-                      </Button>
                     </div>
-                  </div>
-
-                  <div className="sm:col-span-8">
-                    <label className="mb-1 block text-xs font-semibold text-muted-foreground">
-                      Milestone Title
-                    </label>
-                    <Input
-                      value={snapshotTitle}
-                      onChange={(e) => setSnapshotTitle(e.target.value)}
-                      placeholder="e.g. Set up database connection and schemas"
-                      className="text-xs"
-                    />
-                  </div>
-                </div>
-
-                {/* Smart Previous Milestone Inheritance Indicator */}
-                {!editingSnapshotId && previousSnapshot ? (
-                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs">
-                    <div className="flex items-center gap-2 text-foreground font-medium">
-                      <Sparkles className="h-3.5 w-3.5 text-primary" />
-                      <span>
-                        Inherited {files.length} file(s) from previous milestone ({formatTime(previousSnapshot.timestampSeconds)} - {previousSnapshot.title || 'Milestone'}).
-                      </span>
+                    <div>
+                      <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Verification</label>
+                      <Select
+                        value={practiceVerificationMode}
+                        onChange={(event) => setPracticeVerificationMode(event.target.value as typeof practiceVerificationMode)}
+                        options={[
+                          { label: 'None', value: 'NONE' },
+                          { label: 'Compare Code', value: 'CODE_COMPARE' },
+                          { label: 'Run Tests', value: 'TESTS' },
+                        ]}
+                      />
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <Button size="sm" variant="ghost" type="button" onClick={handleResetToClean} className="h-7 text-xs px-2.5">
-                        Start Clean
-                      </Button>
-                      <Button size="sm" variant="secondary" type="button" onClick={handleCopyFromPrevious} className="h-7 text-xs px-2.5">
-                        <Copy className="h-3 w-3 mr-1" />
-                        Re-clone
-                      </Button>
+                    <div>
+                      <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Behavior</label>
+                      <Select
+                        value={practiceBehavior}
+                        onChange={(event) => setPracticeBehavior(event.target.value as typeof practiceBehavior)}
+                        options={[
+                          { label: 'Guided', value: 'GUIDED' },
+                          { label: 'Required', value: 'REQUIRED' },
+                        ]}
+                      />
                     </div>
                   </div>
                 ) : null}
+              </div>
 
-                {/* Multi-File Tab Bar & File Manager */}
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {files.map((file) => (
-                        <div
-                          key={file.path}
-                          onClick={() => setActiveFilePath(file.path)}
-                          className={`group flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-mono font-medium cursor-pointer border transition-colors ${
-                            activeFilePath === file.path
-                              ? 'border-primary/50 bg-primary/10 text-primary'
-                              : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'
-                          }`}
-                        >
-                          <FileCode className="h-3.5 w-3.5" />
-                          <span>{file.path}</span>
-                          {files.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleRemoveFile(file.path);
-                              }}
-                              className="opacity-60 hover:opacity-100 hover:text-destructive transition-opacity ml-1"
-                              title="Delete file"
-                            >
-                              <X className="h-3 w-3" />
-                            </button>
-                          )}
-                        </div>
-                      ))}
-
-                      {!isAddingFile ? (
-                        <Button
-                          size="sm"
-                          variant="ghost"
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                {/* File pills */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {files.map((f) => (
+                    <div
+                      key={f.path}
+                      className={`flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-mono transition-colors ${
+                        activeFilePath === f.path
+                          ? 'bg-foreground text-background font-semibold'
+                          : 'bg-muted/70 text-muted-foreground hover:text-foreground cursor-pointer'
+                      }`}
+                      onClick={() => setActiveFilePath(f.path)}
+                    >
+                      <span>{f.path}</span>
+                      {files.length > 1 && (
+                        <button
                           type="button"
-                          onClick={() => setIsAddingFile(true)}
-                          className="h-7 text-xs px-2 border border-dashed border-border text-muted-foreground hover:text-foreground"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemoveFile(f.path);
+                          }}
+                          className="hover:opacity-70 ml-1"
                         >
-                          <FilePlus className="h-3 w-3 mr-1" />
-                          Add File
-                        </Button>
-                      ) : null}
+                          ×
+                        </button>
+                      )}
                     </div>
+                  ))}
 
-                    <span className="text-[11px] font-mono text-muted-foreground">
-                      Editing: <strong className="text-foreground">{activeFile?.path}</strong>
-                    </span>
-                  </div>
-
-                  {/* Inline Add File Input */}
-                  {isAddingFile && (
-                    <div className="flex items-center gap-2 p-2 rounded-md bg-muted/40 border border-border animate-in fade-in-0 duration-150">
-                      <FolderOpen className="h-4 w-4 text-muted-foreground ml-1" />
+                  {isAddingFile ? (
+                    <div className="flex items-center gap-1">
                       <Input
                         value={newFilePathInput}
                         onChange={(e) => setNewFilePathInput(e.target.value)}
+                        placeholder="src/utils.ts"
+                        className="h-7 text-xs font-mono w-32"
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleAddNewFile();
-                          }
-                          if (e.key === 'Escape') {
-                            setIsAddingFile(false);
-                            setNewFilePathInput('');
-                          }
+                          if (e.key === 'Enter') handleAddNewFile();
+                          if (e.key === 'Escape') setIsAddingFile(false);
                         }}
-                        placeholder="e.g. src/routes/auth.ts or package.json"
-                        className="h-7 text-xs font-mono"
-                        autoFocus
                       />
-                      <Button size="sm" onClick={handleAddNewFile} type="button" className="h-7 text-xs px-2.5">
+                      <Button size="sm" variant="secondary" onClick={handleAddNewFile} className="h-7 px-2 text-xs">
                         Add
                       </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          setIsAddingFile(false);
-                          setNewFilePathInput('');
-                        }}
-                        type="button"
-                        className="h-7 text-xs px-2.5"
-                      >
-                        Cancel
-                      </Button>
                     </div>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setIsAddingFile(true)}
+                      className="h-7 px-2 text-xs text-muted-foreground"
+                    >
+                      <FilePlus className="h-3 w-3 mr-1" />
+                      Add File
+                    </Button>
                   )}
-
-                  {/* Monaco Code Editor */}
-                  <div className="h-72 overflow-hidden rounded-lg border border-border">
-                    <MonacoEditor
-                      height="100%"
-                      language={detectMonacoLanguage(activeFile?.path ?? '', language)}
-                      value={activeFile?.content ?? ''}
-                      theme={resolvedTheme === 'dark' ? 'vs-dark' : 'light'}
-                      onChange={handleActiveFileContentChange}
-                      options={{
-                        minimap: { enabled: false },
-                        fontSize: 13,
-                        lineNumbers: 'on',
-                        scrollBeyondLastLine: false,
-                        automaticLayout: true,
-                        tabSize: 2,
-                      }}
-                    />
-                  </div>
                 </div>
 
-                <div className="flex items-center justify-between pt-2 border-t border-border">
-                  <div className="text-xs text-muted-foreground">
-                    Total files in milestone: <strong className="text-foreground">{files.length}</strong>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => {
-                        setIsCreatingSnapshot(false);
-                        setEditingSnapshotId(null);
-                      }}
-                    >
-                      Cancel
+                <div className="flex items-center gap-2">
+                  {!editingSnapshotId && previousSnapshot && (
+                    <Button size="sm" variant="ghost" onClick={handleCopyFromPrevious} className="text-xs">
+                      <Copy className="h-3 w-3 mr-1" />
+                      Inherit Previous
                     </Button>
-                    <Button
-                      size="sm"
-                      isLoading={saveSnapshotMutation.isPending}
-                      onClick={() => saveSnapshotMutation.mutate()}
-                      leftIcon={<Save className="h-4 w-4" />}
-                    >
-                      {editingSnapshotId ? 'Update Milestone' : 'Save Milestone'}
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Chronological List of Milestones */}
-          <div className="space-y-2.5">
-            {snapshots.map((snap) => (
-              <div
-                key={snap.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-3.5 hover:border-primary/40 transition-colors shadow-2xs"
-              >
-                <div className="flex items-start sm:items-center gap-3">
-                  <Badge tone="info" className="font-mono text-xs py-1 px-2.5 shrink-0">
-                    <Clock className="h-3 w-3 mr-1 inline" />
-                    {formatTime(snap.timestampSeconds)}
-                  </Badge>
-
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-semibold text-foreground">
-                        {snap.title || `${snap.language} Snapshot`}
-                      </p>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2 text-xs font-mono text-muted-foreground">
-                      <span className="text-foreground/80 font-medium">
-                        {snap.files.length} {snap.files.length === 1 ? 'file' : 'files'}:
-                      </span>
-                      {snap.files.slice(0, 3).map((f) => (
-                        <span key={f.path} className="rounded bg-muted px-1.5 py-0.5 text-[11px]">
-                          {f.path}
-                        </span>
-                      ))}
-                      {snap.files.length > 3 ? (
-                        <span className="text-[11px]">+{snap.files.length - 3} more</span>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-1.5">
-                  {onSeekToSeconds ? (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => onSeekToSeconds(snap.timestampSeconds)}
-                      leftIcon={<Play className="h-3 w-3 text-primary" />}
-                      title="Seek video player to this timestamp"
-                      className="h-7 text-xs px-2.5"
-                    >
-                      Jump to Video
-                    </Button>
-                  ) : null}
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => startEditingSnapshot(snap)}
-                    leftIcon={<Edit2 className="h-3 w-3" />}
-                    className="h-7 text-xs px-2.5"
-                  >
-                    Edit
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 text-xs px-2.5 text-destructive hover:bg-destructive/10"
-                    isLoading={deleteSnapshot.isPending && deleteSnapshot.variables === snap.id}
-                    onClick={() => deleteSnapshot.mutate(snap.id)}
-                    leftIcon={<Trash2 className="h-3 w-3" />}
-                  >
-                    Delete
+                  )}
+                  <Button size="sm" variant="ghost" onClick={handleResetToClean} className="text-xs">
+                    Reset
                   </Button>
                 </div>
               </div>
-            ))}
 
-            {snapshots.length === 0 && !isCreatingSnapshot && (
-              <div className="py-10 text-center rounded-lg border border-dashed border-border text-muted-foreground space-y-2">
-                <FileCode className="mx-auto h-9 w-9 text-muted-foreground/40" />
-                <p className="text-sm font-semibold text-foreground">No Milestones Captured Yet</p>
-                <p className="text-xs max-w-md mx-auto text-muted-foreground">
-                  Play the video above and click &quot;Capture Milestone at Current Time&quot; to save the project state at key teaching moments.
-                </p>
+              <div className="overflow-hidden rounded-xl border border-border/70 bg-card">
+                <MonacoEditor
+                  height="340px"
+                  language={detectMonacoLanguage(activeFile?.path ?? '', language)}
+                  theme={resolvedTheme === 'dark' ? 'vs-dark' : 'light'}
+                  value={activeFile?.content ?? ''}
+                  onChange={handleActiveFileContentChange}
+                  options={{
+                    minimap: { enabled: false },
+                    fontSize: 13,
+                    tabSize: 2,
+                    lineNumbersMinChars: 3,
+                    scrollBeyondLastLine: false,
+                    padding: { top: 8, bottom: 8 },
+                  }}
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
                 <Button
                   size="sm"
                   variant="secondary"
-                  onClick={startCreatingSnapshot}
-                  leftIcon={<Plus className="h-4 w-4" />}
-                  className="mt-2"
+                  onClick={() => {
+                    setIsCreatingSnapshot(false);
+                    setEditingSnapshotId(null);
+                  }}
                 >
-                  Create First Milestone
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  isLoading={saveSnapshotMutation.isPending}
+                  onClick={() => saveSnapshotMutation.mutate()}
+                >
+                  <Save className="h-3.5 w-3.5 mr-1" />
+                  <span>{editingSnapshotId ? 'Update Milestone' : 'Save Milestone'}</span>
                 </Button>
               </div>
-            )}
+            </div>
           </div>
+        )}
+
+        {/* Lightweight Vertical Timeline */}
+        <div className="relative pl-6 space-y-3 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-border/70">
+          {snapshots.map((snap) => (
+            <div
+              key={snap.id}
+              className="relative flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-card p-3.5 transition-all hover:border-border hover:shadow-2xs"
+            >
+              {/* Timeline Bullet */}
+              <div className="absolute -left-6 top-1/2 -translate-y-1/2 flex h-4 w-4 items-center justify-center rounded-full bg-background border-2 border-foreground/40" />
+
+              <div className="flex items-start sm:items-center gap-3">
+                <span className="font-mono text-xs font-semibold text-foreground bg-muted px-2 py-0.5 rounded-md shrink-0">
+                  {formatTime(snap.timestampSeconds)}
+                </span>
+
+                <div>
+                  <h5 className="text-xs sm:text-sm font-semibold text-foreground">
+                    {snap.title || `${snap.language} Snapshot`}
+                  </h5>
+                  <p className="text-[11px] font-mono text-muted-foreground mt-0.5">
+                    {snap.files.length} {snap.files.length === 1 ? 'file' : 'files'} · {snap.files.map((f) => f.path).join(', ')}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1">
+                {onSeekToSeconds ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => onSeekToSeconds(snap.timestampSeconds)}
+                    className="h-7 text-xs px-2.5"
+                  >
+                    <Play className="h-3 w-3 mr-1" />
+                    Jump
+                  </Button>
+                ) : null}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => startEditingSnapshot(snap)}
+                  className="h-7 text-xs px-2.5"
+                >
+                  <Edit2 className="h-3 w-3 mr-1" />
+                  Edit
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs px-2.5 text-destructive hover:bg-destructive/10"
+                  isLoading={deleteSnapshot.isPending && deleteSnapshot.variables === snap.id}
+                  onClick={() => deleteSnapshot.mutate(snap.id)}
+                >
+                  <Trash2 className="h-3 w-3 mr-1" />
+                  Delete
+                </Button>
+              </div>
+            </div>
+          ))}
+
+          {snapshots.length === 0 && !isCreatingSnapshot && (
+            <div className="py-8 text-center text-muted-foreground space-y-1">
+              <p className="text-xs font-medium">No timeline milestones captured yet.</p>
+              <p className="text-[11px] text-muted-foreground/80">Click &quot;Add Milestone&quot; above to link code snapshots to video timestamps.</p>
+            </div>
+          )}
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

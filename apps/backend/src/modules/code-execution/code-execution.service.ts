@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   ExecutionStatus,
+  TestCaseVisibility,
   type ExecutionRequest,
   type ExecutionResult,
   type Prisma,
@@ -211,35 +212,126 @@ export class CodeExecutionService {
 
     const workspace = await this.prisma.$transaction(async (transaction) => {
       const repository = new CodeExecutionRepository(transaction);
-      const lesson = await repository.findCodeAlongLessonForStudent(userId, lessonId);
 
-      if (!lesson?.codeAlongConfig) {
-        throw lessonWorkspaceNotAllowed();
+      // 1. Check if it's a VIDEO code-along lesson
+      const videoLesson = await repository.findCodeAlongLessonForStudent(userId, lessonId);
+      if (videoLesson) {
+        const starterSnapshot = videoLesson.videoAsset?.codeSnapshots[0];
+        const snapshotFiles = starterSnapshot ? filesFromJson(starterSnapshot.filesJson) : [];
+        const config = videoLesson.codeAlongConfig?.enabled ? videoLesson.codeAlongConfig : null;
+        const language = validateLanguage(config?.language ?? starterSnapshot?.language ?? DEFAULT_LANGUAGE);
+        const entryFile = safePath(config?.entryFile ?? snapshotFiles[0]?.path ?? DEFAULT_ENTRY_FILE);
+        const files = config
+          ? [{ path: entryFile, content: '' }]
+          : snapshotFiles.length > 0
+            ? snapshotFiles
+            : [{ path: entryFile, content: '' }];
+
+        validateFiles(files, this.env);
+
+        const result = await repository.upsertLessonWorkspace({
+          userId,
+          lessonId: videoLesson.id,
+          language,
+          entryFile,
+          files,
+          now,
+        });
+
+        if (!result) {
+          throw workspaceNotFound();
+        }
+
+        return result;
       }
 
-      const language = validateLanguage(lesson.codeAlongConfig.language);
-      const entryFile = safePath(lesson.codeAlongConfig.entryFile ?? DEFAULT_ENTRY_FILE);
-      const files = [{ path: entryFile, content: '' }];
+      // 2. Check if it's a standalone CODING lesson
+      const codingLesson = await repository.findCodingLessonForStudent(userId, lessonId);
+      if (codingLesson) {
+        const checkpoint = codingLesson.videoCheckpoints[0];
+        const codingConfig = checkpoint?.codingConfig;
+        const language = validateLanguage(codingConfig?.language ?? codingLesson.codeAlongConfig?.language ?? DEFAULT_LANGUAGE);
+        const entryFile = safePath(codingConfig?.entryFile ?? codingLesson.codeAlongConfig?.entryFile ?? DEFAULT_ENTRY_FILE);
+        const files = codingConfig ? filesFromJson(codingConfig.starterFilesJson) : (DEFAULT_STARTER_FILES as WorkspaceFileInput[]);
 
-      validateFiles(files, this.env);
+        validateFiles(files, this.env);
 
-      const result = await repository.upsertLessonWorkspace({
-        userId,
-        lessonId: lesson.id,
-        language,
-        entryFile,
-        files,
-        now,
-      });
+        if (checkpoint) {
+          const result = await repository.upsertCheckpointWorkspace({
+            userId,
+            checkpointId: checkpoint.id,
+            lessonId: codingLesson.id,
+            language,
+            entryFile,
+            files,
+            now,
+          });
 
-      if (!result) {
-        throw workspaceNotFound();
+          if (!result) {
+            throw workspaceNotFound();
+          }
+
+          return result;
+        }
+
+        const result = await repository.upsertLessonWorkspace({
+          userId,
+          lessonId: codingLesson.id,
+          language,
+          entryFile,
+          files,
+          now,
+        });
+
+        if (!result) {
+          throw workspaceNotFound();
+        }
+
+        return result;
       }
 
-      return result;
+      throw lessonWorkspaceNotAllowed();
     });
 
     return mapWorkspace(workspace);
+  }
+
+  async getCodingLessonDetails(userId: string, lessonId: string) {
+    const lesson = await this.repository.findCodingLessonForStudent(userId, lessonId);
+
+    if (!lesson) {
+      throw lessonWorkspaceNotAllowed();
+    }
+
+    const checkpoint = lesson.videoCheckpoints[0];
+    const codingConfig = checkpoint?.codingConfig;
+
+    return {
+      lessonId: lesson.id,
+      title: lesson.title,
+      description: lesson.description,
+      checkpointId: checkpoint?.id ?? null,
+      config: codingConfig
+        ? {
+            language: codingConfig.language,
+            entryFile: codingConfig.entryFile,
+            passScore: Number(codingConfig.passScore),
+            scoringMode: codingConfig.scoringMode,
+            timeLimitMs: codingConfig.timeLimitMs,
+            memoryLimitMb: codingConfig.memoryLimitMb,
+            publicTestCases: codingConfig.testCases
+              .filter((test) => test.visibility === TestCaseVisibility.PUBLIC)
+              .map((test) => ({
+                id: test.id,
+                name: test.name,
+                input: test.input,
+                expectedOutput: test.expectedOutput,
+                weight: Number(test.weight),
+                position: test.position,
+              })),
+          }
+        : null,
+    };
   }
 
   async getWorkspace(userId: string, workspaceId: string) {

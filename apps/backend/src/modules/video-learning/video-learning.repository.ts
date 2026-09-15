@@ -235,6 +235,61 @@ export class VideoLearningRepository {
     });
   }
 
+  async listPracticeStepsForStudent(studentId: string, lessonId: string) {
+    return this.prisma.videoCheckpoint.findMany({
+      where: {
+        lessonId,
+        practiceEnabled: true,
+        videoAsset: {
+          status: VideoAssetStatus.READY,
+          lesson: {
+            module: {
+              course: {
+                status: { in: [CourseStatus.PUBLISHED, CourseStatus.ARCHIVED] },
+                enrollments: { some: { studentId, status: { not: EnrollmentStatus.CANCELLED } } },
+              },
+            },
+          },
+        },
+      },
+      include: {
+        progress: { where: { studentId }, take: 1 },
+      },
+      orderBy: [{ timestampSeconds: 'asc' }, { position: 'asc' }, { createdAt: 'asc' }],
+    });
+  }
+
+  async findPracticeStepForStudent(studentId: string, checkpointId: string) {
+    return this.prisma.videoCheckpoint.findFirst({
+      where: {
+        id: checkpointId,
+        practiceEnabled: true,
+        videoAsset: {
+          status: VideoAssetStatus.READY,
+          lesson: {
+            module: {
+              course: {
+                status: { in: [CourseStatus.PUBLISHED, CourseStatus.ARCHIVED] },
+                enrollments: { some: { studentId, status: { not: EnrollmentStatus.CANCELLED } } },
+              },
+            },
+          },
+        },
+      },
+      include: {
+        videoAsset: true,
+        progress: { where: { studentId }, take: 1 },
+      },
+    });
+  }
+
+  async findLessonWorkspaceForStudent(studentId: string, lessonId: string, workspaceId: string) {
+    return this.prisma.workspace.findFirst({
+      where: { id: workspaceId, userId: studentId, lessonId, checkpointId: null, practiceProblemId: null },
+      include: { files: { orderBy: { path: 'asc' } } },
+    });
+  }
+
   async findCheckpointProgress(studentId: string, checkpointId: string) {
     return this.prisma.checkpointProgress.findUnique({
       where: {
@@ -269,6 +324,31 @@ export class VideoLearningRepository {
         status: CheckpointProgressStatus.COMPLETED,
         startedAt: input.completedAt,
         completedAt: input.completedAt,
+      },
+    });
+  }
+
+  async upsertCheckpointSkipped(input: {
+    readonly studentId: string;
+    readonly checkpointId: string;
+    readonly skippedAt: Date;
+  }) {
+    await this.prisma.checkpointProgress.upsert({
+      where: {
+        studentId_checkpointId: {
+          studentId: input.studentId,
+          checkpointId: input.checkpointId,
+        },
+      },
+      create: {
+        studentId: input.studentId,
+        checkpointId: input.checkpointId,
+        status: CheckpointProgressStatus.SKIPPED,
+        startedAt: input.skippedAt,
+      },
+      update: {
+        status: CheckpointProgressStatus.SKIPPED,
+        startedAt: input.skippedAt,
       },
     });
   }

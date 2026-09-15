@@ -2,12 +2,11 @@
 
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { motion } from 'framer-motion';
 import { CheckCircle2, Circle, Clock, Code, Search, Terminal } from 'lucide-react';
 import Link from 'next/link';
 import {
   Button,
-  Card,
-  CardContent,
   EmptyState,
   ErrorState,
   Input,
@@ -26,6 +25,25 @@ import { useAuthGuard } from '../../features/auth/hooks/use-auth-guard';
 import { type PaginatedResponse, type PracticeProblemSummary, type PracticeStats, requestJson } from '../../lib/api';
 import { queryKeys } from '../../lib/query/keys';
 import { useI18n } from '../../providers/i18n-provider';
+
+const containerVariants = {
+  hidden: { opacity: 0 },
+  visible: {
+    opacity: 1,
+    transition: {
+      staggerChildren: 0.08,
+    },
+  },
+};
+
+const itemVariants = {
+  hidden: { opacity: 0, y: 10 },
+  visible: {
+    opacity: 1,
+    y: 0,
+    transition: { duration: 0.3, ease: [0.16, 1, 0.3, 1] as const },
+  },
+};
 
 export default function PracticePage() {
   const { t } = useI18n();
@@ -93,59 +111,75 @@ export default function PracticePage() {
   const totalPages = problems.data?.pagination.totalPages ?? 1;
 
   return (
-    <main className="px-4 py-8 sm:px-6 lg:px-8 max-w-7xl mx-auto space-y-8">
+    <motion.main
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+      className="px-4 py-6 sm:px-6 lg:px-8 max-w-[1600px] mx-auto space-y-7"
+    >
       {/* Header */}
-      <div className="flex flex-col gap-2">
-        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">
+      <div className="flex flex-col gap-1 border-b border-border/50 pb-5">
+        <h1 className="text-2xl sm:text-[28px] font-bold tracking-tight text-foreground">
           {t('practice.title')}
         </h1>
-        <p className="text-sm text-muted-foreground">{t('practice.description')}</p>
+        <p className="text-xs sm:text-sm text-muted-foreground">{t('practice.description')}</p>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Card>
-          <CardContent className="p-4 sm:p-5 flex items-center gap-4">
-            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <Code className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-xs font-medium text-muted-foreground">{t('practice.published')}</p>
-              <p className="text-xl sm:text-2xl font-bold text-foreground">
-                {stats.data?.totalProblems ?? 0}
-              </p>
-            </div>
-          </CardContent>
-        </Card>
+      {/* Stats Metric Row */}
+      <motion.div
+        variants={containerVariants}
+        initial="hidden"
+        animate="visible"
+        className="grid gap-4 sm:grid-cols-3"
+      >
+        <motion.div
+          variants={itemVariants}
+          whileHover={{ y: -2 }}
+          className="rounded-xl border border-border/70 bg-card p-4 sm:p-5 flex items-center gap-3.5 shadow-[0_1px_3px_rgba(0,0,0,0.02)] transition-shadow hover:shadow-sm"
+        >
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-pastel-blue text-blue-800 dark:text-blue-300">
+            <Code className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-xs font-medium text-muted-foreground">{t('practice.published')}</p>
+            <p className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">
+              {stats.data?.totalProblems ?? 0}
+            </p>
+          </div>
+        </motion.div>
 
-        <Card>
-          <CardContent className="p-4 sm:p-5 flex items-center gap-4">
-            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
-              <Clock className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-xs font-medium text-muted-foreground">{t('practice.attempted')}</p>
-              <p className="text-xl sm:text-2xl font-bold text-foreground">
-                {stats.data?.attempted ?? 0}
-              </p>
-            </div>
-          </CardContent>
-        </Card>
+        <motion.div
+          variants={itemVariants}
+          whileHover={{ y: -2 }}
+          className="rounded-xl border border-border/70 bg-card p-4 sm:p-5 flex items-center gap-3.5 shadow-[0_1px_3px_rgba(0,0,0,0.02)] transition-shadow hover:shadow-sm"
+        >
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-pastel-yellow text-amber-800 dark:text-amber-300">
+            <Clock className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-xs font-medium text-muted-foreground">{t('practice.attempted')}</p>
+            <p className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">
+              {stats.data?.attempted ?? 0}
+            </p>
+          </div>
+        </motion.div>
 
-        <Card>
-          <CardContent className="p-4 sm:p-5 flex items-center gap-4">
-            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-              <CheckCircle2 className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-xs font-medium text-muted-foreground">{t('practice.solved')}</p>
-              <p className="text-xl sm:text-2xl font-bold text-foreground">
-                {stats.data?.solved ?? 0}
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+        <motion.div
+          variants={itemVariants}
+          whileHover={{ y: -2 }}
+          className="rounded-xl border border-border/70 bg-card p-4 sm:p-5 flex items-center gap-3.5 shadow-[0_1px_3px_rgba(0,0,0,0.02)] transition-shadow hover:shadow-sm"
+        >
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-pastel-mint text-emerald-800 dark:text-emerald-300">
+            <CheckCircle2 className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-xs font-medium text-muted-foreground">{t('practice.solved')}</p>
+            <p className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">
+              {stats.data?.solved ?? 0}
+            </p>
+          </div>
+        </motion.div>
+      </motion.div>
 
       {/* Filter Toolbar */}
       <div className="flex flex-col sm:flex-row items-center gap-3">
@@ -272,6 +306,6 @@ export default function PracticePage() {
           icon={<Terminal className="h-8 w-8 text-muted-foreground" />}
         />
       )}
-    </main>
+    </motion.main>
   );
 }

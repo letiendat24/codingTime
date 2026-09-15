@@ -58,6 +58,8 @@
   "accessDenied": "Access Denied",
   "forbidden": "You do not have permission to view this page.",
   "goHome": "Go to Home",
+  "collapse": "Collapse",
+  "expand": "Expand",
   "backToSafety": "Back to Safety",
   "searchPlaceholder": "Search..."
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { AlertCircle, RefreshCw } from 'lucide-react';
+import { AlertCircle, Check, RefreshCw, Settings } from 'lucide-react';
 import Hls from 'hls.js';
 import {
   findBlockedSeekCheckpoint,
@@ -11,6 +11,17 @@ import {
 } from '../lib/video-learning';
 import { getAccessToken } from '../lib/api/client';
 import type { VideoCheckpoint } from '../lib/api';
+import {
+  VIDEO_QUALITY_PREFERENCE_KEY,
+  applyVideoQuality,
+  buildVideoQualityOptions,
+  currentAutoQualityLabel,
+  findQualityByPreference,
+  preferenceFromQuality,
+  type VideoQuality,
+  type VideoQualityOption,
+  type VideoQualityPreference,
+} from '../lib/video-quality';
 
 interface VideoPlayerProps {
   readonly playbackUrl: string;
@@ -21,6 +32,10 @@ interface VideoPlayerProps {
   readonly onProgress?: ((positionSeconds: number) => void) | undefined;
   readonly onTimeChange?: ((positionSeconds: number) => void) | undefined;
   readonly seekToSeconds?: number | null | undefined;
+  readonly subtitleText?: string | null | undefined;
+  readonly pauseSignal?: number | undefined;
+  readonly resumeSignal?: number | undefined;
+  readonly playbackBlocked?: boolean | undefined;
 }
 
 export function VideoPlayer({
@@ -32,6 +47,10 @@ export function VideoPlayer({
   onProgress,
   onTimeChange,
   seekToSeconds,
+  subtitleText,
+  pauseSignal,
+  resumeSignal,
+  playbackBlocked = false,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const previousTimeRef = useRef(initialPositionSeconds);
@@ -39,15 +58,21 @@ export function VideoPlayer({
   const lastSavedPositionRef = useRef(initialPositionSeconds);
   const triggeredCheckpointIdsRef = useRef(new Set<string>());
   const suppressSeekCheckRef = useRef(false);
+  const hlsRef = useRef<Hls | null>(null);
 
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
+  const [qualityMenuOpen, setQualityMenuOpen] = useState(false);
+  const [qualityOptions, setQualityOptions] = useState<readonly VideoQualityOption[]>([]);
+  const [selectedQuality, setSelectedQuality] = useState<VideoQuality>({ mode: 'AUTO' });
+  const [effectiveLevelIndex, setEffectiveLevelIndex] = useState<number | null>(null);
 
   const checkpointsRef = useRef(checkpoints);
   const onCheckpointCrossedRef = useRef(onCheckpointCrossed);
   const onProgressRef = useRef(onProgress);
   const onTimeChangeRef = useRef(onTimeChange);
   const progressSaveIntervalRef = useRef(progressSaveIntervalSeconds);
+  const playbackBlockedRef = useRef(playbackBlocked);
 
   useEffect(() => {
     checkpointsRef.current = checkpoints;
@@ -70,11 +95,22 @@ export function VideoPlayer({
   }, [progressSaveIntervalSeconds]);
 
   useEffect(() => {
+    playbackBlockedRef.current = playbackBlocked;
+    if (playbackBlocked) {
+      void videoRef.current?.pause();
+    }
+  }, [playbackBlocked]);
+
+  useEffect(() => {
     previousTimeRef.current = initialPositionSeconds;
     lastSavedPositionRef.current = initialPositionSeconds;
     lastSavedAtRef.current = 0;
     triggeredCheckpointIdsRef.current = new Set();
     setPlaybackError(null);
+    setQualityMenuOpen(false);
+    setQualityOptions([]);
+    setSelectedQuality({ mode: 'AUTO' });
+    setEffectiveLevelIndex(null);
   }, [initialPositionSeconds, playbackUrl, retryCount]);
 
   useEffect(() => {
@@ -99,9 +135,44 @@ export function VideoPlayer({
     applySeek();
   }, [seekToSeconds]);
 
+  useEffect(() => {
+    if (!pauseSignal) {
+      return;
+    }
+
+    void videoRef.current?.pause();
+  }, [pauseSignal]);
+
+  useEffect(() => {
+    if (!resumeSignal) {
+      return;
+    }
+
+    void videoRef.current?.play().catch(() => {
+      // Browser autoplay policies may still require a direct user gesture.
+    });
+  }, [resumeSignal]);
+
   const handleRetry = useCallback(() => {
     setPlaybackError(null);
     setRetryCount((prev) => prev + 1);
+  }, []);
+
+  const handleSelectQuality = useCallback((quality: VideoQuality) => {
+    const hls = hlsRef.current;
+    if (!hls) {
+      return;
+    }
+
+    applyVideoQuality(hls, quality);
+    setSelectedQuality(quality);
+    setQualityMenuOpen(false);
+
+    try {
+      window.localStorage.setItem(VIDEO_QUALITY_PREFERENCE_KEY, preferenceFromQuality(quality));
+    } catch {
+      // Local preference persistence is best-effort.
+    }
   }, []);
 
   useEffect(() => {
@@ -179,9 +250,43 @@ export function VideoPlayer({
         }
       });
 
+      player.on(Hls.Events.MANIFEST_PARSED, () => {
+        if (destroyed) {
+          return;
+        }
+
+        const options = buildVideoQualityOptions(player.levels);
+        setQualityOptions(options);
+
+        let savedPreference: VideoQualityPreference | null = null;
+        try {
+          const stored = window.localStorage.getItem(VIDEO_QUALITY_PREFERENCE_KEY);
+          savedPreference = stored === 'AUTO' || /^\d+$/.test(stored ?? '') ? (stored as VideoQualityPreference) : null;
+        } catch {
+          savedPreference = null;
+        }
+
+        const restoredQuality = findQualityByPreference(options, savedPreference);
+        applyVideoQuality(player, restoredQuality);
+        setSelectedQuality(restoredQuality);
+      });
+
+      player.on(Hls.Events.LEVEL_SWITCHING, (_event, data) => {
+        if (!destroyed) {
+          setEffectiveLevelIndex(data.level);
+        }
+      });
+
+      player.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
+        if (!destroyed) {
+          setEffectiveLevelIndex(data.level);
+        }
+      });
+
       player.loadSource(resolvedUrl);
       player.attachMedia(video);
       hls = player;
+      hlsRef.current = player;
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       // Native HLS fallback (e.g. mobile Safari)
       video.src = resolvedUrl;
@@ -265,10 +370,17 @@ export function VideoPlayer({
       }
     }
 
+    function handlePlay() {
+      if (playbackBlockedRef.current) {
+        void video.pause();
+      }
+    }
+
     video.addEventListener('loadedmetadata', applyInitialPosition);
     video.addEventListener('timeupdate', handleTimeUpdate);
     video.addEventListener('seeking', handleSeeking);
     video.addEventListener('error', handleVideoError);
+    video.addEventListener('play', handlePlay);
 
     return () => {
       const pos = Math.floor(video.currentTime);
@@ -282,14 +394,27 @@ export function VideoPlayer({
       video.removeEventListener('timeupdate', handleTimeUpdate);
       video.removeEventListener('seeking', handleSeeking);
       video.removeEventListener('error', handleVideoError);
+      video.removeEventListener('play', handlePlay);
       if (hls) {
         hls.destroy();
+        if (hlsRef.current === hls) {
+          hlsRef.current = null;
+        }
       } else {
         video.removeAttribute('src');
         video.load();
       }
     };
   }, [initialPositionSeconds, playbackUrl, retryCount]);
+
+  const effectiveQualityLabel = currentAutoQualityLabel(qualityOptions, effectiveLevelIndex);
+  const selectedQualityLabel =
+    selectedQuality.mode === 'AUTO'
+      ? effectiveQualityLabel
+        ? `Auto · ${effectiveQualityLabel}`
+        : 'Auto'
+      : `${selectedQuality.height}p`;
+  const showQualitySelector = qualityOptions.length > 0;
 
   return (
     <div className="relative aspect-video w-full overflow-hidden rounded-md bg-black">
@@ -299,6 +424,67 @@ export function VideoPlayer({
         controls
         playsInline
       />
+
+      {showQualitySelector ? (
+        <div className="absolute right-3 top-3 z-10">
+          <button
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded={qualityMenuOpen}
+            aria-label={`Video quality: ${selectedQualityLabel}`}
+            onClick={() => setQualityMenuOpen((value) => !value)}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-white/15 bg-black/70 px-2.5 text-[11px] font-semibold text-white shadow-sm backdrop-blur transition-colors hover:bg-black/85 focus:outline-none focus:ring-2 focus:ring-white/70"
+          >
+            <Settings className="h-3.5 w-3.5" />
+            <span>{selectedQualityLabel}</span>
+          </button>
+
+          {qualityMenuOpen ? (
+            <div
+              role="menu"
+              aria-label="Video quality"
+              className="absolute right-0 mt-2 w-36 rounded-md border border-white/15 bg-black/90 p-1 text-white shadow-lg backdrop-blur"
+            >
+              <QualityMenuItem
+                label={effectiveQualityLabel ? `Auto · ${effectiveQualityLabel}` : 'Auto'}
+                selected={selectedQuality.mode === 'AUTO'}
+                onSelect={() => handleSelectQuality({ mode: 'AUTO' })}
+              />
+              {qualityOptions.map((option) => (
+                <QualityMenuItem
+                  key={`${option.height}-${option.levelIndex}`}
+                  label={option.label}
+                  selected={selectedQuality.mode === 'MANUAL' && selectedQuality.height === option.height}
+                  onSelect={() =>
+                    handleSelectQuality(
+                      option.bitrate === undefined
+                        ? {
+                            mode: 'MANUAL',
+                            levelIndex: option.levelIndex,
+                            height: option.height,
+                          }
+                        : {
+                            mode: 'MANUAL',
+                            levelIndex: option.levelIndex,
+                            height: option.height,
+                            bitrate: option.bitrate,
+                          },
+                    )
+                  }
+                />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {subtitleText ? (
+        <div className="pointer-events-none absolute inset-x-3 bottom-12 flex justify-center sm:bottom-14">
+          <p className="max-w-3xl rounded-md bg-black/75 px-3 py-1.5 text-center text-sm font-medium leading-6 text-white shadow-lg sm:text-base">
+            {subtitleText}
+          </p>
+        </div>
+      ) : null}
 
       {playbackError ? (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/85 p-6 text-center text-white backdrop-blur-sm">
@@ -316,5 +502,26 @@ export function VideoPlayer({
         </div>
       ) : null}
     </div>
+  );
+}
+
+interface QualityMenuItemProps {
+  readonly label: string;
+  readonly selected: boolean;
+  readonly onSelect: () => void;
+}
+
+function QualityMenuItem({ label, selected, onSelect }: QualityMenuItemProps) {
+  return (
+    <button
+      type="button"
+      role="menuitemradio"
+      aria-checked={selected}
+      onClick={onSelect}
+      className="flex w-full items-center justify-between rounded px-2.5 py-1.5 text-left text-xs font-medium transition-colors hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/60"
+    >
+      <span>{label}</span>
+      {selected ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <span className="h-3.5 w-3.5" />}
+    </button>
   );
 }

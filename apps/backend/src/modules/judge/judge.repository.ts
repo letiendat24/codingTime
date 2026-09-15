@@ -113,18 +113,33 @@ export class JudgeRepository {
         checkpointId: { not: null },
         checkpoint: {
           type: VideoCheckpointType.CODING,
-          videoAsset: {
-            status: VideoAssetStatus.READY,
-            lesson: {
-              lessonType: LessonType.VIDEO,
-              module: {
-                course: {
-                  status: { in: [CourseStatus.PUBLISHED, CourseStatus.ARCHIVED] },
-                  enrollments: { some: { studentId: userId, status: { not: EnrollmentStatus.CANCELLED } } },
+          OR: [
+            {
+              videoAsset: {
+                status: VideoAssetStatus.READY,
+                lesson: {
+                  lessonType: LessonType.VIDEO,
+                  module: {
+                    course: {
+                      status: { in: [CourseStatus.PUBLISHED, CourseStatus.ARCHIVED] },
+                      enrollments: { some: { studentId: userId, status: { not: EnrollmentStatus.CANCELLED } } },
+                    },
+                  },
                 },
               },
             },
-          },
+            {
+              lesson: {
+                lessonType: LessonType.CODING,
+                module: {
+                  course: {
+                    status: { in: [CourseStatus.PUBLISHED, CourseStatus.ARCHIVED] },
+                    enrollments: { some: { studentId: userId, status: { not: EnrollmentStatus.CANCELLED } } },
+                  },
+                },
+              },
+            },
+          ],
         },
       },
       include: {
@@ -133,6 +148,17 @@ export class JudgeRepository {
           include: {
             codingConfig: {
               include: { testCases: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] } },
+            },
+            lesson: {
+              include: {
+                module: {
+                  include: {
+                    course: {
+                      include: { enrollments: { where: { studentId: userId, status: { not: EnrollmentStatus.CANCELLED } }, take: 1 } },
+                    },
+                  },
+                },
+              },
             },
             videoAsset: {
               include: {
@@ -245,6 +271,7 @@ export class JudgeRepository {
       include: {
         checkpoint: {
           include: {
+            lesson: { include: { module: { include: { course: true } } } },
             videoAsset: { include: { lesson: { include: { module: { include: { course: true } } } } } },
           },
         },
@@ -288,7 +315,6 @@ export class JudgeRepository {
         durationMs: resultRow.durationMs,
         memoryBytes: resultRow.memoryBytes,
       })),
-      skipDuplicates: true,
     });
 
     await this.prisma.judgeSubmission.update({
@@ -298,7 +324,6 @@ export class JudgeRepository {
         score: new Prisma.Decimal(input.totalScore),
         passed: input.passed,
         completedAt: input.completedAt,
-        ...(input.status === JudgeSubmissionStatus.TIMED_OUT ? { failedAt: input.completedAt } : {}),
       },
     });
 
@@ -308,31 +333,32 @@ export class JudgeRepository {
       const previous = await this.prisma.practiceProgress.findUnique({
         where: { studentId_practiceProblemId: { studentId: submission.userId, practiceProblemId: submission.practiceProblemId } },
       });
-      const nextStatus = input.passed ? PracticeProgressStatus.SOLVED : previous?.status === PracticeProgressStatus.SOLVED ? PracticeProgressStatus.SOLVED : PracticeProgressStatus.ATTEMPTED;
-      const previousBest = previous?.bestScore ? Number(previous.bestScore) : null;
-      const bestScore = previousBest === null ? input.totalScore : Math.max(previousBest, input.totalScore);
 
-      await this.prisma.practiceProgress.upsert({
-        where: { studentId_practiceProblemId: { studentId: submission.userId, practiceProblemId: submission.practiceProblemId } },
-        create: {
-          studentId: submission.userId,
-          practiceProblemId: submission.practiceProblemId,
-          status: nextStatus,
-          attemptCount: 1,
-          bestScore: new Prisma.Decimal(bestScore),
-          firstAttemptedAt: input.completedAt,
-          lastAttemptedAt: input.completedAt,
-          solvedAt: input.passed ? input.completedAt : null,
-        },
-        update: {
-          status: nextStatus,
-          attemptCount: { increment: 1 },
-          bestScore: new Prisma.Decimal(bestScore),
-          firstAttemptedAt: previous?.firstAttemptedAt ?? input.completedAt,
-          lastAttemptedAt: input.completedAt,
-          solvedAt: input.passed ? previous?.solvedAt ?? input.completedAt : previous?.solvedAt ?? null,
-        },
-      });
+      if (!previous) {
+        await this.prisma.practiceProgress.create({
+          data: {
+            studentId: submission.userId,
+            practiceProblemId: submission.practiceProblemId,
+            status: input.passed ? PracticeProgressStatus.SOLVED : PracticeProgressStatus.ATTEMPTED,
+            bestScore: new Prisma.Decimal(input.totalScore),
+            attemptCount: 1,
+            firstAttemptedAt: input.completedAt,
+            solvedAt: input.passed ? input.completedAt : null,
+            lastAttemptedAt: input.completedAt,
+          },
+        });
+      } else {
+        await this.prisma.practiceProgress.update({
+          where: { studentId_practiceProblemId: { studentId: submission.userId, practiceProblemId: submission.practiceProblemId } },
+          data: {
+            status: input.passed ? PracticeProgressStatus.SOLVED : previous.status,
+            bestScore: previous.bestScore ? Prisma.Decimal.max(previous.bestScore, new Prisma.Decimal(input.totalScore)) : new Prisma.Decimal(input.totalScore),
+            attemptCount: { increment: 1 },
+            solvedAt: input.passed ? previous.solvedAt ?? input.completedAt : previous.solvedAt,
+            lastAttemptedAt: input.completedAt,
+          },
+        });
+      }
 
       await this.prisma.learningActivity.create({
         data: {
@@ -355,15 +381,18 @@ export class JudgeRepository {
       }
 
       return {
-        ...inactiveJudgeOutcome(submission.userId),
+        completedCheckpoint: false,
+        lessonShouldComplete: false,
+        lessonId: null,
+        studentId: submission.userId,
         notification: {
           userId: submission.userId,
           type: NotificationType.JUDGE_COMPLETED,
           category: NotificationCategory.PRACTICE,
-          title: input.passed ? 'Practice submission accepted' : 'Practice submission completed',
+          title: input.passed ? 'Practice solution accepted' : 'Practice submission judged',
           message: `${submission.practiceProblem?.title ?? 'Practice problem'} was judged with score ${input.totalScore}.`,
           actionUrl: submission.practiceProblem?.slug ? `/practice/${submission.practiceProblem.slug}` : '/practice',
-          dedupeKey: `JUDGE_COMPLETED:${input.submissionId}:${submission.userId}`,
+          dedupeKey: `PRACTICE_JUDGED:${input.submissionId}:${submission.userId}`,
           data: {
             submissionId: input.submissionId,
             practiceProblemId: submission.practiceProblemId,
@@ -391,6 +420,9 @@ export class JudgeRepository {
       return inactiveJudgeOutcome(submission.userId);
     }
 
+    const course = submission.checkpoint.lesson?.module?.course ?? submission.checkpoint.videoAsset?.lesson?.module?.course;
+    const isCodingLesson = submission.checkpoint.lesson?.lessonType === LessonType.CODING;
+
     if (input.passed) {
       const previous = await this.prisma.checkpointProgress.findUnique({
         where: { studentId_checkpointId: { studentId: submission.userId, checkpointId: submission.checkpointId } },
@@ -417,7 +449,7 @@ export class JudgeRepository {
           data: {
             userId: submission.userId,
             type: LearningActivityType.CODING_PASSED,
-            courseId: submission.checkpoint.videoAsset.lesson.module.course.id,
+            courseId: course?.id ?? null,
             lessonId: submission.checkpoint.lessonId,
             metadata: { checkpointId: submission.checkpointId, submissionId: input.submissionId },
             createdAt: input.completedAt,
@@ -427,37 +459,44 @@ export class JudgeRepository {
     }
 
     const required = await this.prisma.videoCheckpoint.count({
-      where: { videoAssetId: submission.checkpoint.videoAssetId, required: true },
+      where: {
+        ...(submission.checkpoint.videoAssetId ? { videoAssetId: submission.checkpoint.videoAssetId } : { lessonId: submission.checkpoint.lessonId }),
+        required: true,
+      },
     });
     const completed = await this.prisma.videoCheckpoint.count({
       where: {
-        videoAssetId: submission.checkpoint.videoAssetId,
+        ...(submission.checkpoint.videoAssetId ? { videoAssetId: submission.checkpoint.videoAssetId } : { lessonId: submission.checkpoint.lessonId }),
         required: true,
         progress: { some: { studentId: submission.userId, status: CheckpointProgressStatus.COMPLETED } },
       },
     });
-    const videoProgress = await this.prisma.videoProgress.findUnique({
-      where: { studentId_videoAssetId: { studentId: submission.userId, videoAssetId: submission.checkpoint.videoAssetId } },
-    });
+    const videoProgress = submission.checkpoint.videoAssetId
+      ? await this.prisma.videoProgress.findUnique({
+          where: { studentId_videoAssetId: { studentId: submission.userId, videoAssetId: submission.checkpoint.videoAssetId } },
+        })
+      : null;
+
+    const lessonShouldComplete = isCodingLesson ? (input.passed && completed >= required) : (Boolean(videoProgress?.completedAt) && completed >= required);
 
     return {
       completedCheckpoint,
-      lessonShouldComplete: Boolean(videoProgress?.completedAt) && completed >= required,
+      lessonShouldComplete,
       lessonId: submission.checkpoint.lessonId,
       studentId: submission.userId,
       notification: {
         userId: submission.userId,
         type: NotificationType.JUDGE_COMPLETED,
         category: NotificationCategory.LEARNING,
-        title: input.passed ? 'Coding checkpoint passed' : 'Coding checkpoint judged',
+        title: input.passed ? 'Coding challenge passed' : 'Coding challenge judged',
         message: `${submission.checkpoint.title} was judged with score ${input.totalScore}.`,
-        actionUrl: `/courses/${submission.checkpoint.videoAsset.lesson.module.course.slug}/learn`,
+        actionUrl: course ? `/courses/${course.slug}/learn?lesson=${submission.checkpoint.lessonId}` : '/learning',
         dedupeKey: `JUDGE_COMPLETED:${input.submissionId}:${submission.userId}`,
         data: {
           submissionId: input.submissionId,
           checkpointId: submission.checkpointId,
           lessonId: submission.checkpoint.lessonId,
-          courseId: submission.checkpoint.videoAsset.lesson.module.course.id,
+          courseId: course?.id ?? null,
           score: input.totalScore,
           passed: input.passed,
         },

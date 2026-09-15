@@ -7,6 +7,9 @@ import {
   PrismaClient,
   RoleName,
   VideoAssetStatus,
+  VideoCheckpointType,
+  VideoPracticeBehavior,
+  VideoPracticeVerificationMode,
 } from '@prisma/client';
 import type { Express } from 'express';
 import type { Client as MinioClient } from 'minio';
@@ -226,6 +229,40 @@ describe('video-code synchronization integration', () => {
     await request(app).post(`/api/v1/learning/lessons/${lesson.id}/workspace`).set('Authorization', `Bearer ${outsider.token}`).expect(400);
   });
 
+  it('treats ready video lessons with instructor snapshots as code-along runtime even without config', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const student = await createUser([RoleName.STUDENT]);
+    const { lesson, video } = await seedVideoLesson(instructor.id, student.id);
+
+    await prisma.codeSnapshot.create({
+      data: {
+        lessonId: lesson.id,
+        videoAssetId: video!.id,
+        timestampSeconds: 0,
+        title: 'Starter state',
+        language: 'typescript',
+        filesJson: { files: [{ path: 'src/index.ts', content: 'export const ready = true;\n' }] },
+        createdByUserId: instructor.id,
+      },
+    });
+
+    const metadata = await request(app)
+      .get(`/api/v1/learning/lessons/${lesson.id}/code-along`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .expect(200);
+
+    expect(metadata.body).toMatchObject({ enabled: true });
+    expect(metadata.body.snapshots).toHaveLength(1);
+
+    const opened = await request(app)
+      .post(`/api/v1/learning/lessons/${lesson.id}/workspace`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .expect(200);
+
+    expect(opened.body.workspace.lessonId).toBe(lesson.id);
+    expect(opened.body.workspace.files).toEqual([{ path: 'src/index.ts', content: 'export const ready = true;\n' }]);
+  });
+
   it('backs up workspace files before snapshot import and enforces revision ownership on restore', async () => {
     const instructor = await createUser([RoleName.INSTRUCTOR]);
     const student = await createUser([RoleName.STUDENT]);
@@ -277,5 +314,131 @@ describe('video-code synchronization integration', () => {
       .expect(200);
 
     expect(restored.body.workspace.files).toEqual([{ path: 'src/index.ts', content: 'const student = true;\n' }]);
+  });
+
+  it('configures practice steps, completes NONE/CODE_COMPARE, and persists progress', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const student = await createUser([RoleName.STUDENT]);
+    const { lesson, video } = await seedVideoLesson(instructor.id, student.id);
+
+    await prisma.videoCodeAlongConfig.create({ data: { lessonId: lesson.id, enabled: true, language: 'typescript', entryFile: 'src/index.ts' } });
+    const snapshot = await prisma.codeSnapshot.create({
+      data: {
+        lessonId: lesson.id,
+        videoAssetId: video!.id,
+        timestampSeconds: 40,
+        title: 'Loop',
+        language: 'typescript',
+        filesJson: { files: [{ path: 'src/index.ts', content: 'const ready = true;\n' }] },
+        createdByUserId: instructor.id,
+      },
+    });
+    const checkpoint = await prisma.videoCheckpoint.create({
+      data: {
+        lessonId: lesson.id,
+        videoAssetId: video!.id,
+        timestampSeconds: 40,
+        type: VideoCheckpointType.INFO,
+        title: 'Implement loop',
+        description: 'Match the instructor reference',
+        required: false,
+        pauseVideo: false,
+      },
+    });
+
+    const configured = await request(app)
+      .put(`/api/v1/instructor/checkpoints/${checkpoint.id}/practice-step`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({
+        practiceEnabled: true,
+        practiceVerificationMode: VideoPracticeVerificationMode.CODE_COMPARE,
+        practiceBehavior: VideoPracticeBehavior.GUIDED,
+        practiceSnapshotId: snapshot.id,
+        practiceTargetFilePath: 'src/index.ts',
+      })
+      .expect(200);
+
+    expect(configured.body.checkpoint.practiceEnabled).toBe(true);
+
+    const opened = await request(app).post(`/api/v1/learning/lessons/${lesson.id}/workspace`).set('Authorization', `Bearer ${student.token}`).expect(200);
+    await request(app)
+      .put(`/api/v1/workspaces/${opened.body.workspace.id}/files`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send({ files: [{ path: 'src/index.ts', content: 'const ready = true;  \r\n' }] })
+      .expect(200);
+
+    const steps = await request(app)
+      .get(`/api/v1/learning/lessons/${lesson.id}/practice-steps`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .expect(200);
+
+    expect(steps.body.practiceSteps).toHaveLength(1);
+    expect(steps.body.practiceSteps[0]).toMatchObject({
+      id: checkpoint.id,
+      verificationMode: VideoPracticeVerificationMode.CODE_COMPARE,
+      behavior: VideoPracticeBehavior.GUIDED,
+      status: 'NOT_STARTED',
+    });
+
+    await request(app)
+      .post(`/api/v1/learning/practice-steps/${checkpoint.id}/complete`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send({ workspaceId: opened.body.workspace.id })
+      .expect(200);
+
+    const progress = await prisma.checkpointProgress.findUniqueOrThrow({
+      where: { studentId_checkpointId: { studentId: student.id, checkpointId: checkpoint.id } },
+    });
+    expect(progress.status).toBe('COMPLETED');
+  });
+
+  it('allows guided practice skip and rejects required practice skip', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const student = await createUser([RoleName.STUDENT]);
+    const { lesson, video } = await seedVideoLesson(instructor.id, student.id);
+
+    const guided = await prisma.videoCheckpoint.create({
+      data: {
+        lessonId: lesson.id,
+        videoAssetId: video!.id,
+        timestampSeconds: 20,
+        type: VideoCheckpointType.INFO,
+        title: 'Guided',
+        required: false,
+        pauseVideo: false,
+        practiceEnabled: true,
+        practiceVerificationMode: VideoPracticeVerificationMode.NONE,
+        practiceBehavior: VideoPracticeBehavior.GUIDED,
+      },
+    });
+    const required = await prisma.videoCheckpoint.create({
+      data: {
+        lessonId: lesson.id,
+        videoAssetId: video!.id,
+        timestampSeconds: 40,
+        type: VideoCheckpointType.INFO,
+        title: 'Required',
+        required: true,
+        pauseVideo: false,
+        practiceEnabled: true,
+        practiceVerificationMode: VideoPracticeVerificationMode.NONE,
+        practiceBehavior: VideoPracticeBehavior.REQUIRED,
+      },
+    });
+
+    await request(app)
+      .post(`/api/v1/learning/practice-steps/${guided.id}/skip`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .expect(200);
+
+    const skipped = await prisma.checkpointProgress.findUniqueOrThrow({
+      where: { studentId_checkpointId: { studentId: student.id, checkpointId: guided.id } },
+    });
+    expect(skipped.status).toBe('SKIPPED');
+
+    await request(app)
+      .post(`/api/v1/learning/practice-steps/${required.id}/skip`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .expect(409);
   });
 });

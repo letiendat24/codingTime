@@ -39,3 +39,15 @@ export function codeSnapshotTimestampInvalid() {
 export function codeSnapshotFilesInvalid(message = 'Code snapshot files are invalid') {
   return new HttpError(400, 'CODE_SNAPSHOT_FILES_INVALID', message);
 }
+
+export function practiceStepInvalid(message = 'Practice step configuration is invalid') {
+  return new HttpError(400, 'PRACTICE_STEP_INVALID', message);
+}
+
+export function practiceStepNotFound() {
+  return new HttpError(404, 'PRACTICE_STEP_NOT_FOUND', 'Practice step not found');
+}
+
+export function practiceStepRequired() {
+  return new HttpError(409, 'PRACTICE_STEP_REQUIRED', 'Required practice steps cannot be skipped');
+}

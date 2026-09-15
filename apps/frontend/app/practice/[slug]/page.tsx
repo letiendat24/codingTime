@@ -177,9 +177,9 @@ export default function PracticeProblemPage() {
   }
 
   return (
-    <main className="min-h-screen flex flex-col bg-background">
+    <div className="min-h-full flex flex-col bg-background">
       {/* Top Header */}
-      <header className="sticky top-14 z-30 border-b border-border bg-card/95 px-4 py-2.5 backdrop-blur sm:px-6">
+      <header className="sticky top-0 z-30 border-b border-border/70 bg-card/95 px-4 py-3 backdrop-blur-md sm:px-6 shadow-2xs">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <Link
@@ -504,6 +504,6 @@ export default function PracticeProblemPage() {
           </div>
         </div>
       </div>
-    </main>
+    </div>
   );
 }

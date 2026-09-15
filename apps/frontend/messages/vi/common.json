@@ -58,6 +58,8 @@
   "accessDenied": "Truy cập bị từ chối",
   "forbidden": "Bạn không có quyền truy cập trang này.",
   "goHome": "Về trang chủ",
+  "collapse": "Thu gọn",
+  "expand": "Mở rộng",
   "backToSafety": "Về trang an toàn",
   "searchPlaceholder": "Tìm kiếm..."
 }
