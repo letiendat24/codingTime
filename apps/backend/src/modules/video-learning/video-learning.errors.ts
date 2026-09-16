@@ -44,6 +44,14 @@ export function practiceStepInvalid(message = 'Practice step configuration is in
   return new HttpError(400, 'PRACTICE_STEP_INVALID', message);
 }
 
+export function practiceCompareUnavailable(message = 'Unable to compare this step right now.') {
+  return new HttpError(409, 'COMPARE_UNAVAILABLE', message);
+}
+
+export function practiceCompareMismatch(message = 'Your code does not match this step yet.') {
+  return new HttpError(409, 'COMPARE_MISMATCH', message);
+}
+
 export function practiceStepNotFound() {
   return new HttpError(404, 'PRACTICE_STEP_NOT_FOUND', 'Practice step not found');
 }

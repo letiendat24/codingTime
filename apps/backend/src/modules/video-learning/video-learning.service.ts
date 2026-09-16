@@ -6,8 +6,10 @@ import {
   VideoCheckpointType,
   VideoPracticeBehavior,
   VideoPracticeVerificationMode,
+  VideoWorkspaceType,
+  JudgeSubmissionStatus,
+  Prisma,
   type CodeSnapshot,
-  type Prisma,
   type PrismaClient,
   type VideoCheckpoint,
   type VideoProgress,
@@ -50,6 +52,7 @@ import type {
   InstructorCheckpointResponse,
   InteractiveVideoPlaybackResponse,
   PracticeStepCompletionResponse,
+  PracticeVerificationStatus,
   PracticeStepResponse,
   StudentCodeAlongResponse,
   StudentCheckpoint,
@@ -76,6 +79,16 @@ const SUPPORTED_SNAPSHOT_LANGUAGES = new Set([
 
 const DEFAULT_CODE_ALONG_LANGUAGE = 'javascript';
 const DEFAULT_CODE_ALONG_ENTRY_FILE = 'index.js';
+const DEFAULT_CODE_ALONG_CAPABILITIES = {
+  allowEditFiles: true,
+  allowCreateFiles: false,
+  allowCreateFolders: false,
+  allowRenameFiles: false,
+  allowDeleteFiles: false,
+  allowRun: true,
+  allowCheck: true,
+  allowJudge: true,
+} as const;
 
 function clampPosition(positionSeconds: number, durationSeconds: number) {
   if (positionSeconds < 0) {
@@ -152,6 +165,7 @@ function mapPracticeStep(checkpoint: VideoCheckpoint & { progress?: readonly { s
     lessonId: checkpoint.lessonId,
     videoAssetId: checkpoint.videoAssetId,
     timestampSeconds: checkpoint.timestampSeconds,
+    timestampMs: checkpoint.timestampSeconds * 1000,
     title: checkpoint.title,
     instruction: checkpoint.description,
     required: checkpoint.required,
@@ -161,8 +175,41 @@ function mapPracticeStep(checkpoint: VideoCheckpoint & { progress?: readonly { s
     targetFilePath: checkpoint.practiceTargetFilePath,
     targetStartLine: checkpoint.practiceTargetStartLine,
     targetEndLine: checkpoint.practiceTargetEndLine,
+    verificationRules: checkpoint.practiceVerificationRulesJson ?? null,
     status,
     completed: status === CheckpointProgressStatus.COMPLETED,
+  };
+}
+
+function mapCodeAlongConfig(config: {
+  readonly enabled: boolean;
+  readonly language: string;
+  readonly entryFile: string | null;
+  readonly workspaceType?: VideoWorkspaceType | null;
+  readonly allowEditFiles?: boolean | null;
+  readonly allowCreateFiles?: boolean | null;
+  readonly allowCreateFolders?: boolean | null;
+  readonly allowRenameFiles?: boolean | null;
+  readonly allowDeleteFiles?: boolean | null;
+  readonly allowRun?: boolean | null;
+  readonly allowCheck?: boolean | null;
+  readonly allowJudge?: boolean | null;
+}, fallbackEnabled = false): CodeAlongConfigResponse {
+  return {
+    enabled: config.enabled || fallbackEnabled,
+    language: config.language,
+    entryFile: config.entryFile,
+    workspaceType: config.workspaceType ?? VideoWorkspaceType.SINGLE_FILE,
+    capabilities: {
+      allowEditFiles: config.allowEditFiles ?? DEFAULT_CODE_ALONG_CAPABILITIES.allowEditFiles,
+      allowCreateFiles: config.allowCreateFiles ?? DEFAULT_CODE_ALONG_CAPABILITIES.allowCreateFiles,
+      allowCreateFolders: config.allowCreateFolders ?? DEFAULT_CODE_ALONG_CAPABILITIES.allowCreateFolders,
+      allowRenameFiles: config.allowRenameFiles ?? DEFAULT_CODE_ALONG_CAPABILITIES.allowRenameFiles,
+      allowDeleteFiles: config.allowDeleteFiles ?? DEFAULT_CODE_ALONG_CAPABILITIES.allowDeleteFiles,
+      allowRun: config.allowRun ?? DEFAULT_CODE_ALONG_CAPABILITIES.allowRun,
+      allowCheck: config.allowCheck ?? DEFAULT_CODE_ALONG_CAPABILITIES.allowCheck,
+      allowJudge: config.allowJudge ?? DEFAULT_CODE_ALONG_CAPABILITIES.allowJudge,
+    },
   };
 }
 
@@ -184,6 +231,142 @@ function sliceLineRange(content: string, startLine: number | null, endLine: numb
   const start = Math.max(0, (startLine ?? 1) - 1);
   const end = Math.max(start + 1, endLine ?? lines.length);
   return lines.slice(start, end).join('\n');
+}
+
+type CodeFile = { readonly path: string; readonly content: string };
+type PracticeVerificationRule = {
+  readonly type: string;
+  readonly path?: string | undefined;
+  readonly value?: string | undefined;
+  readonly field?: string | undefined;
+};
+type VerificationResult = {
+  readonly status: PracticeVerificationStatus;
+  readonly details: readonly string[];
+};
+
+function passed(details: readonly string[] = ['Verification passed']): VerificationResult {
+  return { status: 'PASSED', details };
+}
+
+function failed(details: readonly string[]): VerificationResult {
+  return { status: 'FAILED', details };
+}
+
+function unavailable(details: readonly string[]): VerificationResult {
+  return { status: 'UNAVAILABLE', details };
+}
+
+function parseVerificationRules(value: unknown) {
+  const source = value && typeof value === 'object' ? value as {
+    readonly requiredPaths?: unknown;
+    readonly rules?: unknown;
+  } : {};
+  const requiredPaths = Array.isArray(source.requiredPaths)
+    ? source.requiredPaths.filter((path): path is string => typeof path === 'string' && path.length > 0)
+    : [];
+  const rules = Array.isArray(source.rules)
+    ? source.rules
+        .filter((rule): rule is { readonly type: string; readonly path?: string; readonly value?: string; readonly field?: string } =>
+          Boolean(rule)
+          && typeof rule === 'object'
+          && typeof (rule as { readonly type?: unknown }).type === 'string')
+        .map((rule) => ({
+          type: rule.type,
+          path: typeof rule.path === 'string' ? rule.path : undefined,
+          value: typeof rule.value === 'string' ? rule.value : undefined,
+          field: typeof rule.field === 'string' ? rule.field : undefined,
+        }))
+    : [];
+
+  return { requiredPaths, rules };
+}
+
+function fileByPath(files: readonly CodeFile[], path: string | null | undefined) {
+  return path ? files.find((file) => file.path === path) : undefined;
+}
+
+function safeRegex(pattern: string): RegExp | null {
+  if (pattern.length > 160) {
+    return null;
+  }
+
+  try {
+    return new RegExp(pattern, 'm');
+  } catch {
+    return null;
+  }
+}
+
+function symbolRegex(kind: string, symbol: string) {
+  const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (kind === 'EXPORT_EXISTS') return new RegExp(`export\\s+(?:default\\s+)?(?:const|let|var|function|class|interface|type)\\s+${escaped}\\b|export\\s*\\{[^}]*\\b${escaped}\\b`, 'm');
+  if (kind === 'IMPORT_EXISTS') return new RegExp(`import\\s+(?:[^;]*\\b${escaped}\\b[^;]*\\s+from\\s+)?['"][^'"]+['"]|import\\s*\\([^)]*${escaped}[^)]*\\)`, 'm');
+  if (kind === 'FUNCTION_EXISTS') return new RegExp(`function\\s+${escaped}\\b|(?:const|let|var)\\s+${escaped}\\s*=\\s*(?:async\\s*)?(?:\\([^)]*\\)|[A-Za-z_$][\\w$]*)\\s*=>`, 'm');
+  if (kind === 'CLASS_EXISTS') return new RegExp(`class\\s+${escaped}\\b`, 'm');
+  if (kind === 'COMPONENT_EXISTS') return new RegExp(`function\\s+${escaped}\\b|(?:const|let|var)\\s+${escaped}\\s*=|class\\s+${escaped}\\b`, 'm');
+  return new RegExp(`\\b${escaped}\\b`, 'm');
+}
+
+function evaluateStructuralRules(files: readonly CodeFile[], fallbackPath: string | null, rulesValue: unknown): VerificationResult {
+  const { requiredPaths, rules } = parseVerificationRules(rulesValue);
+  const failures: string[] = [];
+
+  for (const requiredPath of requiredPaths) {
+    if (!fileByPath(files, requiredPath)) {
+      failures.push(`Missing required file: ${requiredPath}`);
+    }
+  }
+
+  const effectiveRules: readonly PracticeVerificationRule[] = rules.length > 0
+    ? rules
+    : fallbackPath
+      ? [{ type: 'FILE_EXISTS', path: fallbackPath }]
+      : [];
+
+  for (const rule of effectiveRules) {
+    const targetPath = rule.path ?? fallbackPath ?? null;
+    const target = fileByPath(files, targetPath);
+
+    if (rule.type === 'FILE_EXISTS') {
+      if (!targetPath || !target) failures.push(`Missing required file: ${targetPath ?? 'target file'}`);
+      continue;
+    }
+
+    if (!target) {
+      failures.push(`Missing file for ${rule.type}: ${targetPath ?? 'target file'}`);
+      continue;
+    }
+
+    if (rule.type === 'TEXT_CONTAINS') {
+      if (!rule.value || !target.content.includes(rule.value)) failures.push(`Expected text not found in ${target.path}`);
+      continue;
+    }
+
+    if (rule.type === 'REGEX_MATCH') {
+      const regex = rule.value ? safeRegex(rule.value) : null;
+      if (!regex || !regex.test(target.content)) failures.push(`Expected pattern not found in ${target.path}`);
+      continue;
+    }
+
+    if (rule.type === 'JSON_FIELD') {
+      try {
+        const json = JSON.parse(target.content) as Record<string, unknown>;
+        if (!rule.field || !(rule.field in json)) failures.push(`Missing JSON field ${rule.field ?? ''} in ${target.path}`.trim());
+      } catch {
+        failures.push(`Invalid JSON in ${target.path}`);
+      }
+      continue;
+    }
+
+    if (['EXPORT_EXISTS', 'IMPORT_EXISTS', 'FUNCTION_EXISTS', 'CLASS_EXISTS', 'COMPONENT_EXISTS', 'SYMBOL_EXISTS'].includes(rule.type)) {
+      const regex = rule.value ? symbolRegex(rule.type, rule.value) : null;
+      if (!regex || !regex.test(target.content)) failures.push(`${rule.value ?? 'Symbol'} not found in ${target.path}`);
+      continue;
+    }
+  }
+
+  return failures.length > 0 ? failed(failures) : passed(['Workspace requirements satisfied']);
 }
 
 function mapSnapshotMetadata(snapshot: Pick<CodeSnapshot, 'id' | 'timestampSeconds' | 'title' | 'language'>): CodeSnapshotMetadata {
@@ -315,11 +498,26 @@ export class VideoLearningService {
 
     const config = lesson.codeAlongConfig;
     const hasInstructorSnapshots = lesson.videoAsset.codeSnapshots.length > 0;
+    const mapped = mapCodeAlongConfig(
+      {
+        enabled: config?.enabled ?? false,
+        language: config?.language ?? DEFAULT_CODE_ALONG_LANGUAGE,
+        entryFile: config?.entryFile ?? DEFAULT_CODE_ALONG_ENTRY_FILE,
+        workspaceType: config?.workspaceType ?? null,
+        allowEditFiles: config?.allowEditFiles ?? null,
+        allowCreateFiles: config?.allowCreateFiles ?? null,
+        allowCreateFolders: config?.allowCreateFolders ?? null,
+        allowRenameFiles: config?.allowRenameFiles ?? null,
+        allowDeleteFiles: config?.allowDeleteFiles ?? null,
+        allowRun: config?.allowRun ?? null,
+        allowCheck: config?.allowCheck ?? null,
+        allowJudge: config?.allowJudge ?? null,
+      },
+      hasInstructorSnapshots,
+    );
 
     return {
-      enabled: Boolean(config?.enabled || hasInstructorSnapshots),
-      language: config?.language ?? DEFAULT_CODE_ALONG_LANGUAGE,
-      entryFile: config?.entryFile ?? DEFAULT_CODE_ALONG_ENTRY_FILE,
+      ...mapped,
       workspaceId: lesson.workspaces[0]?.id ?? null,
       snapshots: lesson.videoAsset.codeSnapshots.map(mapSnapshotMetadata),
     };
@@ -339,13 +537,18 @@ export class VideoLearningService {
       enabled: input.enabled,
       language: input.language.toLowerCase(),
       entryFile,
+      workspaceType: input.workspaceType,
+      allowEditFiles: input.allowEditFiles,
+      allowCreateFiles: input.allowCreateFiles,
+      allowCreateFolders: input.allowCreateFolders,
+      allowRenameFiles: input.allowRenameFiles,
+      allowDeleteFiles: input.allowDeleteFiles,
+      allowRun: input.allowRun,
+      allowCheck: input.allowCheck,
+      allowJudge: input.allowJudge,
     });
 
-    return {
-      enabled: config.enabled,
-      language: config.language,
-      entryFile: config.entryFile,
-    };
+    return mapCodeAlongConfig(config);
   }
 
   async updateProgress(studentId: string, videoAssetId: string, input: VideoProgressInput): Promise<VideoProgressResponse> {
@@ -492,11 +695,27 @@ export class VideoLearningService {
       throw checkpointNotFound();
     }
 
+    const compareMode = input.practiceVerificationMode === VideoPracticeVerificationMode.CODE_COMPARE
+      || input.practiceVerificationMode === VideoPracticeVerificationMode.FILE_COMPARE;
+
+    if (input.practiceEnabled && compareMode && !input.practiceSnapshotId) {
+      throw practiceStepInvalid('File compare practice steps require an instructor snapshot reference');
+    }
+
     if (input.practiceSnapshotId) {
       const snapshot = await this.repository.findSnapshotForInstructor(instructorId, input.practiceSnapshotId);
 
       if (!snapshot || snapshot.lessonId !== checkpoint.lessonId || snapshot.videoAssetId !== checkpoint.videoAssetId) {
         throw practiceStepInvalid('Practice snapshot must belong to the same video lesson');
+      }
+
+      if (input.practiceEnabled && compareMode) {
+        const snapshotFiles = filesFromJson(snapshot);
+        const targetPath = input.practiceTargetFilePath ?? snapshotFiles[0]?.path;
+
+        if (!targetPath || !snapshotFiles.some((file) => file.path === targetPath)) {
+          throw practiceStepInvalid('File compare target file must exist in the selected instructor snapshot');
+        }
       }
     }
 
@@ -516,6 +735,7 @@ export class VideoLearningService {
       practiceTargetFilePath: input.practiceTargetFilePath ?? null,
       practiceTargetStartLine: input.practiceTargetStartLine ?? null,
       practiceTargetEndLine: input.practiceTargetEndLine ?? null,
+      practiceVerificationRulesJson: input.practiceVerificationRules === undefined ? Prisma.DbNull : input.practiceVerificationRules as Prisma.InputJsonValue,
     });
 
     return mapInstructorCheckpoint(updated);
@@ -606,7 +826,7 @@ export class VideoLearningService {
     let shouldCompleteLesson = false;
     let lessonId = '';
 
-    const checkpointProgress = await this.prisma.$transaction(async (transaction) => {
+    const result = await this.prisma.$transaction(async (transaction) => {
       const repository = new VideoLearningRepository(transaction);
       const checkpoint = await repository.findPracticeStepForStudent(studentId, checkpointId);
 
@@ -615,43 +835,76 @@ export class VideoLearningService {
       }
 
       lessonId = checkpoint.lessonId;
+      const mode = checkpoint.practiceVerificationMode === VideoPracticeVerificationMode.CODE_COMPARE
+        ? VideoPracticeVerificationMode.FILE_COMPARE
+        : checkpoint.practiceVerificationMode;
+      let verification: VerificationResult;
 
-      if (checkpoint.practiceVerificationMode === VideoPracticeVerificationMode.CODE_COMPARE) {
+      if (mode === VideoPracticeVerificationMode.NONE) {
+        verification = passed(['Student confirmed completion']);
+      } else if (mode === VideoPracticeVerificationMode.FILE_COMPARE) {
         if (!input.workspaceId || !checkpoint.practiceSnapshotId) {
-          throw practiceStepInvalid('Code compare requires a lesson workspace and instructor snapshot');
+          verification = unavailable(['Workspace or instructor reference is missing']);
+        } else {
+          const [workspace, snapshot] = await Promise.all([
+            repository.findLessonWorkspaceForStudent(studentId, checkpoint.lessonId, input.workspaceId),
+            repository.findSnapshotForStudent(studentId, checkpoint.practiceSnapshotId),
+          ]);
+
+          if (!workspace || !snapshot) {
+            verification = unavailable(['Workspace or instructor reference is unavailable']);
+          } else {
+            const snapshotFiles = filesFromJson(snapshot);
+            const targetPath = checkpoint.practiceTargetFilePath ?? snapshotFiles[0]?.path;
+            const studentFile = workspace.files.find((file) => file.path === targetPath);
+            const instructorFile = snapshotFiles.find((file) => file.path === targetPath);
+
+            if (!targetPath || !studentFile || !instructorFile) {
+              verification = unavailable(['Target file is missing from workspace or reference snapshot']);
+            } else {
+              const studentCode = normalizeCompareCode(sliceLineRange(studentFile.content, checkpoint.practiceTargetStartLine, checkpoint.practiceTargetEndLine));
+              const instructorCode = normalizeCompareCode(sliceLineRange(instructorFile.content, checkpoint.practiceTargetStartLine, checkpoint.practiceTargetEndLine));
+              verification = studentCode === instructorCode
+                ? passed([`${targetPath} matches the reference`])
+                : failed([`${targetPath} does not match the reference yet`]);
+            }
+          }
         }
-
-        const [workspace, snapshot] = await Promise.all([
-          repository.findLessonWorkspaceForStudent(studentId, checkpoint.lessonId, input.workspaceId),
-          repository.findSnapshotForStudent(studentId, checkpoint.practiceSnapshotId),
-        ]);
-
-        if (!workspace || !snapshot) {
-          throw practiceStepInvalid('Code compare requires accessible student workspace and instructor snapshot');
+      } else if (mode === VideoPracticeVerificationMode.STRUCTURAL || mode === VideoPracticeVerificationMode.WORKSPACE_STRUCTURE) {
+        if (!input.workspaceId) {
+          verification = unavailable(['Workspace is required for this check']);
+        } else {
+          const workspace = await repository.findLessonWorkspaceForStudent(studentId, checkpoint.lessonId, input.workspaceId);
+          verification = workspace
+            ? evaluateStructuralRules(workspace.files, checkpoint.practiceTargetFilePath, checkpoint.practiceVerificationRulesJson)
+            : unavailable(['Workspace is unavailable']);
         }
-
-        const snapshotFiles = filesFromJson(snapshot);
-        const targetPath = checkpoint.practiceTargetFilePath ?? snapshotFiles[0]?.path;
-        const studentFile = workspace.files.find((file) => file.path === targetPath);
-        const instructorFile = snapshotFiles.find((file) => file.path === targetPath);
-
-        if (!targetPath || !studentFile || !instructorFile) {
-          throw practiceStepInvalid('Target file is missing from student or instructor code');
+      } else if (mode === VideoPracticeVerificationMode.TESTS) {
+        if (!input.workspaceId) {
+          verification = unavailable(['Submit to Judge before checking this step']);
+        } else {
+          const submission = await repository.findLatestCompletedJudgeSubmissionForWorkspace(studentId, input.workspaceId);
+          if (!submission) {
+            verification = unavailable(['No completed judge submission found for this workspace']);
+          } else if (submission.status === JudgeSubmissionStatus.ACCEPTED && submission.passed === true) {
+            verification = passed(['Latest judge submission passed']);
+          } else {
+            verification = failed([`Latest judge submission did not pass (${submission.status})`]);
+          }
         }
-
-        const studentCode = normalizeCompareCode(sliceLineRange(studentFile.content, checkpoint.practiceTargetStartLine, checkpoint.practiceTargetEndLine));
-        const instructorCode = normalizeCompareCode(sliceLineRange(instructorFile.content, checkpoint.practiceTargetStartLine, checkpoint.practiceTargetEndLine));
-
-        if (studentCode !== instructorCode) {
-          throw practiceStepInvalid('Code does not match the instructor reference for this practice step');
-        }
-      }
-
-      if (checkpoint.practiceVerificationMode === VideoPracticeVerificationMode.TESTS) {
-        throw practiceStepInvalid('Use the existing workspace judge submission action to verify TESTS practice steps');
+      } else {
+        verification = unavailable(['Unsupported practice verification mode']);
       }
 
       const existing = await repository.findCheckpointProgress(studentId, checkpoint.id);
+      if (verification.status !== 'PASSED') {
+        return {
+          checkpoint,
+          progress: existing,
+          verification,
+        };
+      }
+
       await repository.upsertCheckpointCompleted({
         studentId,
         checkpointId: checkpoint.id,
@@ -670,20 +923,36 @@ export class VideoLearningService {
         throw practiceStepNotFound();
       }
 
-      return updated;
+      return {
+        checkpoint,
+        progress: updated,
+        verification,
+      };
     });
 
     if (shouldCompleteLesson) {
       await this.learningService.completeLesson(studentId, lessonId);
     }
 
+    const progressStatus = result.progress?.status ?? CheckpointProgressStatus.NOT_STARTED;
+    const completedAt = result.progress?.completedAt ?? null;
+
     return {
       id: checkpointId,
-      status: checkpointProgress.status,
-      completedAt: checkpointProgress.completedAt?.toISOString() ?? null,
-      passed: true,
-      message: 'Practice step completed',
-      lessonCompleted: shouldCompleteLesson,
+      status: progressStatus,
+      completedAt: completedAt?.toISOString() ?? null,
+      passed: result.verification.status === 'PASSED',
+      message: result.verification.status === 'PASSED'
+        ? 'Practice step completed'
+        : result.verification.status === 'FAILED'
+          ? 'Not complete yet'
+          : 'Unable to verify this step right now',
+      lessonCompleted: result.verification.status === 'PASSED' ? shouldCompleteLesson : false,
+      verification: {
+        status: result.verification.status,
+        verificationMode: result.checkpoint.practiceVerificationMode,
+        details: result.verification.details,
+      },
     };
   }
 

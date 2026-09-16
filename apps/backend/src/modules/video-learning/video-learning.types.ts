@@ -1,4 +1,4 @@
-import type { CheckpointProgressStatus, VideoCheckpointType, VideoPracticeBehavior, VideoPracticeVerificationMode } from '@prisma/client';
+import type { CheckpointProgressStatus, VideoCheckpointType, VideoPracticeBehavior, VideoPracticeVerificationMode, VideoWorkspaceType } from '@prisma/client';
 
 export interface VideoProgressState {
   readonly lastPositionSeconds: number;
@@ -45,11 +45,24 @@ export interface CodeAlongConfigResponse {
   readonly enabled: boolean;
   readonly language: string;
   readonly entryFile: string | null;
+  readonly workspaceType: VideoWorkspaceType;
+  readonly capabilities: VideoWorkspaceCapabilities;
 }
 
 export interface StudentCodeAlongResponse extends CodeAlongConfigResponse {
   readonly workspaceId: string | null;
   readonly snapshots: readonly CodeSnapshotMetadata[];
+}
+
+export interface VideoWorkspaceCapabilities {
+  readonly allowEditFiles: boolean;
+  readonly allowCreateFiles: boolean;
+  readonly allowCreateFolders: boolean;
+  readonly allowRenameFiles: boolean;
+  readonly allowDeleteFiles: boolean;
+  readonly allowRun: boolean;
+  readonly allowCheck: boolean;
+  readonly allowJudge: boolean;
 }
 
 export interface VideoProgressResponse extends VideoProgressState {
@@ -97,6 +110,7 @@ export interface PracticeStepResponse {
   readonly lessonId: string;
   readonly videoAssetId: string | null;
   readonly timestampSeconds: number;
+  readonly timestampMs: number;
   readonly title: string;
   readonly instruction: string | null;
   readonly required: boolean;
@@ -106,9 +120,12 @@ export interface PracticeStepResponse {
   readonly targetFilePath: string | null;
   readonly targetStartLine: number | null;
   readonly targetEndLine: number | null;
+  readonly verificationRules: unknown;
   readonly status: CheckpointProgressStatus;
   readonly completed: boolean;
 }
+
+export type PracticeVerificationStatus = 'PASSED' | 'FAILED' | 'UNAVAILABLE';
 
 export interface PracticeStepCompletionResponse {
   readonly id: string;
@@ -117,4 +134,9 @@ export interface PracticeStepCompletionResponse {
   readonly passed: boolean;
   readonly message: string;
   readonly lessonCompleted: boolean;
+  readonly verification: {
+    readonly status: PracticeVerificationStatus;
+    readonly verificationMode: VideoPracticeVerificationMode;
+    readonly details: readonly string[];
+  };
 }

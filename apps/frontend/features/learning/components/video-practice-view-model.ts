@@ -1,4 +1,4 @@
-import type { VideoPracticeStep, WorkspaceFile } from '../../../lib/api';
+import type { VideoPracticeStep, WorkspaceCapabilities, WorkspaceFile } from '../../../lib/api';
 import type { CodeSnapshotMetadata } from '../../../lib/api';
 import { selectSnapshotAtOrBefore } from '../../../lib/video-learning';
 
@@ -12,18 +12,25 @@ export function selectActiveInstructorSnapshot(
 }
 
 export function findPracticeStepCrossed(
-  previousSecond: number,
-  currentSecond: number,
+  previousTimeMs: number,
+  currentTimeMs: number,
   steps: readonly VideoPracticeStep[],
   triggeredStepIds: ReadonlySet<string>,
 ): VideoPracticeStep | null {
-  const [from, to] = previousSecond <= currentSecond
-    ? [previousSecond, currentSecond]
-    : [currentSecond, previousSecond];
+  const [from, to] = previousTimeMs <= currentTimeMs
+    ? [previousTimeMs, currentTimeMs]
+    : [currentTimeMs, previousTimeMs];
 
   const candidates = steps
-    .filter((step) => !step.completed && step.status !== 'SKIPPED' && !triggeredStepIds.has(step.id))
-    .filter((step) => step.timestampSeconds > from && step.timestampSeconds <= to)
+    .filter((step) =>
+      !step.completed
+      && step.status !== 'COMPLETED'
+      && step.status !== 'SKIPPED'
+      && !triggeredStepIds.has(step.id))
+    .filter((step) => {
+      const timestampMs = step.timestampMs ?? step.timestampSeconds * 1000;
+      return timestampMs > from && timestampMs <= to;
+    })
     .sort((a, b) => a.timestampSeconds - b.timestampSeconds);
 
   return candidates[0] ?? null;
@@ -31,6 +38,54 @@ export function findPracticeStepCrossed(
 
 export function shouldPauseForPracticeStep(mode: VideoLearningMode, step: VideoPracticeStep | null): boolean {
   return mode === 'PRACTICE' && Boolean(step);
+}
+
+export function defaultVideoLearningMode(hasPracticeSteps: boolean): VideoLearningMode {
+  return hasPracticeSteps ? 'PRACTICE' : 'FOLLOW';
+}
+
+export function parseStoredVideoLearningMode(value: string | null, hasPracticeSteps: boolean): VideoLearningMode {
+  if (value === 'FOLLOW' || value === 'PRACTICE') {
+    return value;
+  }
+
+  return defaultVideoLearningMode(hasPracticeSteps);
+}
+
+export function practiceReferenceSnapshotId(
+  activePracticeStep: VideoPracticeStep | null,
+  playbackSnapshotId: string | undefined,
+): string | undefined {
+  return activePracticeStep?.snapshotId ?? playbackSnapshotId;
+}
+
+export function findBlockingPracticeSeekStep(
+  mode: VideoLearningMode,
+  currentTimeMs: number,
+  requestedTargetMs: number,
+  steps: readonly VideoPracticeStep[],
+): VideoPracticeStep | null {
+  if (mode !== 'PRACTICE' || requestedTargetMs <= currentTimeMs) {
+    return null;
+  }
+
+  const candidates = steps
+    .filter((step) =>
+      (step.required || step.behavior === 'REQUIRED')
+      && !step.completed
+      && step.status !== 'COMPLETED'
+      && step.status !== 'SKIPPED')
+    .filter((step) => {
+      const timestampMs = step.timestampMs ?? step.timestampSeconds * 1000;
+      return timestampMs > currentTimeMs && timestampMs <= requestedTargetMs;
+    })
+    .sort((a, b) => {
+      const left = a.timestampMs ?? a.timestampSeconds * 1000;
+      const right = b.timestampMs ?? b.timestampSeconds * 1000;
+      return left - right;
+    });
+
+  return candidates[0] ?? null;
 }
 
 export function isCodeAlongRuntimeEnabled(input: {
@@ -67,6 +122,12 @@ export const VIDEO_CODE_LAYOUT_STORAGE_KEY = 'codesync.video.layout';
 export const DEFAULT_VIDEO_SPLIT_RATIO = 45;
 export const MIN_VIDEO_SPLIT_RATIO = 30;
 export const MAX_VIDEO_SPLIT_RATIO = 60;
+export const VIDEO_CODE_ALONG_GRID_CLASS_NAME =
+  'flex min-h-0 flex-col gap-3 xl:grid xl:h-[calc(100vh-220px)] xl:min-h-[620px] xl:items-start xl:gap-0';
+export const VIDEO_CODE_ALONG_VIDEO_PANE_CLASS_NAME =
+  'min-w-0 self-start overflow-hidden border border-border bg-card xl:rounded-l-xl';
+export const VIDEO_CODE_ALONG_CODE_PANE_CLASS_NAME =
+  'min-w-0 overflow-y-auto border border-border bg-background p-3 xl:h-full xl:rounded-r-xl';
 
 export function clampVideoSplitRatio(value: number): number {
   if (!Number.isFinite(value)) {
@@ -140,6 +201,43 @@ export function normalizeCodeForPracticeCompare(value: string) {
     .map((line) => line.trimEnd())
     .join('\n')
     .trim();
+}
+
+export const DEFAULT_WORKSPACE_CAPABILITIES: WorkspaceCapabilities = {
+  allowEditFiles: true,
+  allowCreateFiles: false,
+  allowCreateFolders: false,
+  allowRenameFiles: false,
+  allowDeleteFiles: false,
+  allowRun: true,
+  allowCheck: true,
+  allowJudge: true,
+};
+
+export function normalizeVirtualWorkspacePath(path: string): string {
+  return path.trim().replace(/^\/+/, '').replace(/\/+/g, '/');
+}
+
+export function isSafeVirtualWorkspacePath(path: string): boolean {
+  if (path.trim().startsWith('/')) {
+    return false;
+  }
+
+  const normalized = normalizeVirtualWorkspacePath(path);
+  return Boolean(normalized)
+    && !normalized.startsWith('/')
+    && !normalized.includes('\\')
+    && normalized.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..');
+}
+
+export function pathConflictsWithExistingFile(path: string, files: readonly WorkspaceFile[]): boolean {
+  const normalized = normalizeVirtualWorkspacePath(path);
+  return files.some((file) => file.path === normalized);
+}
+
+export function isFolderNonEmpty(path: string, files: readonly WorkspaceFile[]): boolean {
+  const normalized = normalizeVirtualWorkspacePath(path).replace(/\/$/, '');
+  return files.some((file) => file.path.startsWith(`${normalized}/`));
 }
 
 export function instructorSnapshotDoesNotOverwriteStudentCode(

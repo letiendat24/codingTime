@@ -263,7 +263,7 @@ export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
             <aside
               className={cn(
                 'hidden lg:flex flex-col h-full shrink-0 border-r border-border/60 bg-card/40 transition-[width] duration-200 ease-in-out select-none relative',
-                isCollapsed ? 'w-17' : 'w-60',
+                isCollapsed ? 'w-[72px]' : 'w-60',
               )}
             >
               <Sidebar
@@ -337,7 +337,7 @@ function Sidebar({
 
   return (
     <div className="flex flex-col h-full justify-between">
-      <div className="flex-1 overflow-y-auto overflow-x-hidden p-2.5 space-y-4">
+      <div className={cn('flex-1 overflow-y-auto overflow-x-hidden space-y-4', isCollapsed ? 'p-2' : 'p-2.5')}>
         {/* Quick Search Bar / Quick Icon */}
         {!isCollapsed ? (
           <div className="relative">
@@ -368,7 +368,7 @@ function Sidebar({
                 router.push('/courses');
                 onNavigate?.();
               }}
-              className="flex h-9.5 w-9.5 items-center justify-center rounded-lg border border-border/80 bg-card text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors shadow-2xs"
+              className="flex h-10 w-10 items-center justify-center rounded-xl border border-border/80 bg-card text-muted-foreground hover:text-foreground hover:bg-muted/70 transition-all shadow-2xs"
             >
               <Search className="h-4.5 w-4.5" />
             </button>
@@ -386,7 +386,7 @@ function Sidebar({
               <div className="mx-auto my-2 h-px w-6 bg-border/60" />
             )}
 
-            <div className="space-y-0.5">
+            <div className="space-y-1">
               {group.items.map((item) => {
                 const active =
                   item.href === '/courses'
@@ -405,15 +405,15 @@ function Sidebar({
                       key={item.href}
                       title={item.label}
                       className={cn(
-                        'flex h-9.5 w-9.5 mx-auto items-center justify-center rounded-lg text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground/20',
+                        'flex h-10 w-10 mx-auto items-center justify-center rounded-xl transition-all focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground/20 group relative',
                         active
-                          ? 'bg-muted text-foreground font-semibold shadow-2xs'
-                          : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                          ? 'bg-foreground text-background font-bold shadow-2xs'
+                          : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
                       )}
                       href={item.href}
                       {...linkProps}
                     >
-                      <span className={cn(active ? 'text-foreground' : 'text-muted-foreground')}>
+                      <span className={cn('flex items-center justify-center [&>svg]:h-[19px] [&>svg]:w-[19px]', active ? 'text-background' : 'text-muted-foreground group-hover:text-foreground')}>
                         {item.icon}
                       </span>
                     </Link>
@@ -432,7 +432,7 @@ function Sidebar({
                     href={item.href}
                     {...linkProps}
                   >
-                    <span className={cn(active ? 'text-foreground' : 'text-muted-foreground')}>{item.icon}</span>
+                    <span className={cn('flex items-center justify-center shrink-0 [&>svg]:h-4.5 [&>svg]:w-4.5', active ? 'text-foreground' : 'text-muted-foreground')}>{item.icon}</span>
                     <span className="truncate">{item.label}</span>
                   </Link>
                 );
@@ -444,14 +444,14 @@ function Sidebar({
 
       {/* Bottom Collapse / Expand Action */}
       {onToggleCollapse ? (
-        <div className="border-t border-border/60 p-2 shrink-0">
+        <div className={cn('border-t border-border/60 shrink-0', isCollapsed ? 'p-2' : 'p-2')}>
           {!isCollapsed ? (
             <button
               type="button"
               onClick={onToggleCollapse}
               className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
             >
-              <PanelLeftClose className="h-4 w-4" />
+              <PanelLeftClose className="h-4.5 w-4.5" />
               <span>{t('common.collapse')}</span>
             </button>
           ) : (
@@ -459,9 +459,9 @@ function Sidebar({
               type="button"
               title={t('common.expand')}
               onClick={onToggleCollapse}
-              className="flex h-9.5 w-9.5 mx-auto items-center justify-center rounded-lg text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
+              className="flex h-10 w-10 mx-auto items-center justify-center rounded-xl text-muted-foreground hover:bg-muted/70 hover:text-foreground transition-all"
             >
-              <PanelLeft className="h-4.5 w-4.5" />
+              <PanelLeft className="h-5 w-5" />
             </button>
           )}
         </div>

@@ -1,12 +1,13 @@
 'use client';
 
+import { useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, BookOpen, PlayCircle, Sparkles, User as UserIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { Button, ErrorState, PageSkeleton, StatusBadge } from '../../../design-system';
 import { CurriculumView } from '../../../features/courses/components/curriculum-view';
-import { type CourseDetail, type EnrollmentSummary, requestJson } from '../../../lib/api';
+import { type CourseDetail, type CourseLearningSummary, type EnrollmentSummary, requestJson } from '../../../lib/api';
 import { queryKeys } from '../../../lib/query/keys';
 import { useCurrentUser } from '../../../hooks/use-current-user';
 import { useI18n } from '../../../providers/i18n-provider';
@@ -42,6 +43,22 @@ export default function CourseDetailPage() {
   const courseData = course.data?.course;
   const enrollment = myCourses.data?.items.find((item) => item.course.id === courseData?.id);
   const isEnrolled = Boolean(enrollment);
+
+  const progressQuery = useQuery({
+    queryKey: ['course-progress', courseData?.id],
+    enabled: Boolean(isEnrolled && courseData?.id),
+    queryFn: () => requestJson<CourseLearningSummary>(`/learning/courses/${courseData?.id}/progress`),
+    retry: false,
+  });
+
+  const completedLessonIds = useMemo<ReadonlySet<string>>(() => {
+    if (!progressQuery.data?.lessons) return new Set<string>();
+    return new Set(
+      progressQuery.data.lessons
+        .filter((lesson) => lesson.status === 'COMPLETED')
+        .map((lesson) => lesson.id)
+    );
+  }, [progressQuery.data?.lessons]);
 
   const enrollMutation = useMutation({
     mutationFn: () =>
@@ -162,7 +179,11 @@ export default function CourseDetailPage() {
         <h2 className="text-lg font-bold tracking-tight text-foreground">
           {t('courses.curriculum')}
         </h2>
-        <CurriculumView course={courseData} isEnrolled={isEnrolled} />
+        <CurriculumView
+          course={courseData}
+          isEnrolled={isEnrolled}
+          completedLessonIds={completedLessonIds}
+        />
       </section>
     </main>
   );

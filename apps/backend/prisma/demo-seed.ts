@@ -1,5 +1,6 @@
 import {
   CheckpointProgressStatus,
+  type CodeSnapshot,
   CourseDifficulty,
   CourseStatus,
   EnrollmentStatus,
@@ -23,6 +24,8 @@ import {
   UserStatus,
   VideoAssetStatus,
   VideoCheckpointType,
+  VideoPracticeBehavior,
+  VideoPracticeVerificationMode,
 } from '@prisma/client';
 import argon2 from 'argon2';
 import { existsSync } from 'node:fs';
@@ -651,18 +654,20 @@ async function createVideoForLesson(lessonId: string, instructorId: string, posi
 
 async function seedSnapshots(lessonId: string, videoAssetId: string, instructorId: string) {
   const timeline = [
-    [0, 'Initial Project'],
+    [43, 'Milestone at 00:43'],
+    [95, 'Milestone at 01:35'],
     [180, 'Application Entry Point'],
     [390, 'Add User Model'],
     [600, 'Add User Service'],
     [900, 'Add API Route'],
     [1_200, 'Refactor'],
   ] as const;
+  const snapshots: CodeSnapshot[] = [];
 
   await prisma.codeSnapshot.deleteMany({ where: { lessonId } });
 
   for (const [index, [timestampSeconds, title]] of timeline.entries()) {
-    await prisma.codeSnapshot.create({
+    const snapshot = await prisma.codeSnapshot.create({
       data: {
         lessonId,
         videoAssetId,
@@ -673,7 +678,55 @@ async function seedSnapshots(lessonId: string, videoAssetId: string, instructorI
         createdByUserId: instructorId,
       },
     });
+    snapshots.push(snapshot);
   }
+
+  return snapshots;
+}
+
+async function seedPracticeCheckpoint(lessonId: string, videoAssetId: string, snapshotId: string) {
+  await prisma.videoCheckpoint.create({
+    data: {
+      lessonId,
+      videoAssetId,
+      timestampSeconds: 43,
+      type: VideoCheckpointType.INFO,
+      title: 'Practice Step: Build the first TypeScript model',
+      description: 'Update My Code so it matches the instructor snapshot for this milestone.',
+      required: true,
+      pauseVideo: false,
+      position: 43,
+      practiceEnabled: true,
+      practiceVerificationMode: VideoPracticeVerificationMode.CODE_COMPARE,
+      practiceBehavior: VideoPracticeBehavior.REQUIRED,
+      practiceSnapshotId: snapshotId,
+      practiceTargetFilePath: 'src/index.ts',
+    },
+  });
+}
+
+async function seedWorkspaceStructurePracticeCheckpoint(lessonId: string, videoAssetId: string) {
+  await prisma.videoCheckpoint.create({
+    data: {
+      lessonId,
+      videoAssetId,
+      timestampSeconds: 95,
+      type: VideoCheckpointType.INFO,
+      title: 'Practice Step: Create UserCard component',
+      description: 'Create a UserCard component file and export UserCard. Your source can differ from the instructor snapshot.',
+      required: true,
+      pauseVideo: false,
+      position: 95,
+      practiceEnabled: true,
+      practiceVerificationMode: VideoPracticeVerificationMode.WORKSPACE_STRUCTURE,
+      practiceBehavior: VideoPracticeBehavior.REQUIRED,
+      practiceTargetFilePath: 'src/components/UserCard.tsx',
+      practiceVerificationRulesJson: {
+        requiredPaths: ['src/components/UserCard.tsx'],
+        rules: [{ type: 'EXPORT_EXISTS', path: 'src/components/UserCard.tsx', value: 'UserCard' }],
+      } as Prisma.InputJsonValue,
+    },
+  });
 }
 
 async function seedCodingCheckpoint(lessonId: string, videoAssetId: string, title: string, task: NonNullable<LessonSpec['codingTask']>, position: number) {
@@ -990,12 +1043,46 @@ async function seedCourse(spec: CourseSpec, instructorId: string) {
         const video = await createVideoForLesson(lesson.id, instructorId, lessonIndex + 1);
 
         if (lessonSpec.codeAlong) {
+          const isProjectWorkspaceDemo = lessonIndex % 2 === 1;
           await prisma.videoCodeAlongConfig.upsert({
             where: { lessonId: lesson.id },
-            update: { enabled: true, language: 'typescript', entryFile: 'src/index.ts' },
-            create: { lessonId: lesson.id, enabled: true, language: 'typescript', entryFile: 'src/index.ts' },
+            update: {
+              enabled: true,
+              language: 'typescript',
+              entryFile: isProjectWorkspaceDemo ? 'src/App.tsx' : 'src/index.ts',
+              workspaceType: isProjectWorkspaceDemo ? 'MULTI_FILE' : 'SINGLE_FILE',
+              allowCreateFiles: isProjectWorkspaceDemo,
+              allowCreateFolders: isProjectWorkspaceDemo,
+              allowRenameFiles: isProjectWorkspaceDemo,
+              allowDeleteFiles: isProjectWorkspaceDemo,
+              allowRun: !isProjectWorkspaceDemo,
+              allowCheck: true,
+              allowJudge: !isProjectWorkspaceDemo,
+            },
+            create: {
+              lessonId: lesson.id,
+              enabled: true,
+              language: 'typescript',
+              entryFile: isProjectWorkspaceDemo ? 'src/App.tsx' : 'src/index.ts',
+              workspaceType: isProjectWorkspaceDemo ? 'MULTI_FILE' : 'SINGLE_FILE',
+              allowCreateFiles: isProjectWorkspaceDemo,
+              allowCreateFolders: isProjectWorkspaceDemo,
+              allowRenameFiles: isProjectWorkspaceDemo,
+              allowDeleteFiles: isProjectWorkspaceDemo,
+              allowRun: !isProjectWorkspaceDemo,
+              allowCheck: true,
+              allowJudge: !isProjectWorkspaceDemo,
+            },
           });
-          await seedSnapshots(lesson.id, video.id, instructorId);
+          const snapshots = await seedSnapshots(lesson.id, video.id, instructorId);
+          const firstPracticeSnapshot = snapshots[0];
+          if (firstPracticeSnapshot) {
+            if (isProjectWorkspaceDemo) {
+              await seedWorkspaceStructurePracticeCheckpoint(lesson.id, video.id);
+            } else {
+              await seedPracticeCheckpoint(lesson.id, video.id, firstPracticeSnapshot.id);
+            }
+          }
           await seedInfoCheckpoint(lesson.id, video.id, 'Pause and inspect the User model', 1);
           if (lessonIndex % 2 === 0) {
             await seedCodingCheckpoint(lesson.id, video.id, 'Implement username validation before continuing', 'validateUsername', 2);

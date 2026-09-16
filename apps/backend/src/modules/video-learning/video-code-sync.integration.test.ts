@@ -346,6 +346,28 @@ describe('video-code synchronization integration', () => {
       },
     });
 
+    await request(app)
+      .put(`/api/v1/instructor/checkpoints/${checkpoint.id}/practice-step`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({
+        practiceEnabled: true,
+        practiceVerificationMode: VideoPracticeVerificationMode.CODE_COMPARE,
+        practiceBehavior: VideoPracticeBehavior.GUIDED,
+      })
+      .expect(400);
+
+    await request(app)
+      .put(`/api/v1/instructor/checkpoints/${checkpoint.id}/practice-step`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({
+        practiceEnabled: true,
+        practiceVerificationMode: VideoPracticeVerificationMode.CODE_COMPARE,
+        practiceBehavior: VideoPracticeBehavior.GUIDED,
+        practiceSnapshotId: snapshot.id,
+        practiceTargetFilePath: 'src/missing.ts',
+      })
+      .expect(400);
+
     const configured = await request(app)
       .put(`/api/v1/instructor/checkpoints/${checkpoint.id}/practice-step`)
       .set('Authorization', `Bearer ${instructor.token}`)
@@ -361,11 +383,6 @@ describe('video-code synchronization integration', () => {
     expect(configured.body.checkpoint.practiceEnabled).toBe(true);
 
     const opened = await request(app).post(`/api/v1/learning/lessons/${lesson.id}/workspace`).set('Authorization', `Bearer ${student.token}`).expect(200);
-    await request(app)
-      .put(`/api/v1/workspaces/${opened.body.workspace.id}/files`)
-      .set('Authorization', `Bearer ${student.token}`)
-      .send({ files: [{ path: 'src/index.ts', content: 'const ready = true;  \r\n' }] })
-      .expect(200);
 
     const steps = await request(app)
       .get(`/api/v1/learning/lessons/${lesson.id}/practice-steps`)
@@ -377,14 +394,46 @@ describe('video-code synchronization integration', () => {
       id: checkpoint.id,
       verificationMode: VideoPracticeVerificationMode.CODE_COMPARE,
       behavior: VideoPracticeBehavior.GUIDED,
+      snapshotId: snapshot.id,
+      targetFilePath: 'src/index.ts',
       status: 'NOT_STARTED',
     });
 
-    await request(app)
+    const missingWorkspace = await request(app)
+      .post(`/api/v1/learning/practice-steps/${checkpoint.id}/complete`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send({ workspaceId: randomUUID() })
+      .expect(200);
+
+    expect(missingWorkspace.body.practiceProgress.verification.status).toBe('UNAVAILABLE');
+
+    const mismatch = await request(app)
       .post(`/api/v1/learning/practice-steps/${checkpoint.id}/complete`)
       .set('Authorization', `Bearer ${student.token}`)
       .send({ workspaceId: opened.body.workspace.id })
       .expect(200);
+
+    expect(mismatch.body.practiceProgress).toMatchObject({
+      status: 'NOT_STARTED',
+      passed: false,
+      verification: { status: 'FAILED', verificationMode: VideoPracticeVerificationMode.CODE_COMPARE },
+    });
+    await expect(prisma.checkpointProgress.findUnique({
+      where: { studentId_checkpointId: { studentId: student.id, checkpointId: checkpoint.id } },
+    })).resolves.toBeNull();
+
+    await request(app)
+      .put(`/api/v1/workspaces/${opened.body.workspace.id}/files`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send({ files: [{ path: 'src/index.ts', content: 'const ready = true;  \r\n' }] })
+      .expect(200);
+
+    const passed = await request(app)
+      .post(`/api/v1/learning/practice-steps/${checkpoint.id}/complete`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send({ workspaceId: opened.body.workspace.id })
+      .expect(200);
+    expect(passed.body.practiceProgress.verification.status).toBe('PASSED');
 
     const progress = await prisma.checkpointProgress.findUniqueOrThrow({
       where: { studentId_checkpointId: { studentId: student.id, checkpointId: checkpoint.id } },
@@ -440,5 +489,79 @@ describe('video-code synchronization integration', () => {
       .post(`/api/v1/learning/practice-steps/${required.id}/skip`)
       .set('Authorization', `Bearer ${student.token}`)
       .expect(409);
+  });
+
+  it('verifies workspace structure without requiring exact instructor source text', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const student = await createUser([RoleName.STUDENT]);
+    const { lesson, video } = await seedVideoLesson(instructor.id, student.id);
+
+    await prisma.videoCodeAlongConfig.create({
+      data: {
+        lessonId: lesson.id,
+        enabled: true,
+        language: 'typescript',
+        entryFile: 'src/App.tsx',
+        workspaceType: 'MULTI_FILE',
+        allowCreateFiles: true,
+        allowCreateFolders: true,
+        allowRun: false,
+        allowJudge: false,
+      },
+    });
+    const checkpoint = await prisma.videoCheckpoint.create({
+      data: {
+        lessonId: lesson.id,
+        videoAssetId: video!.id,
+        timestampSeconds: 70,
+        type: VideoCheckpointType.INFO,
+        title: 'Create UserCard',
+        required: true,
+        pauseVideo: false,
+        practiceEnabled: true,
+        practiceVerificationMode: VideoPracticeVerificationMode.WORKSPACE_STRUCTURE,
+        practiceBehavior: VideoPracticeBehavior.REQUIRED,
+        practiceTargetFilePath: 'src/components/UserCard.tsx',
+        practiceVerificationRulesJson: {
+          requiredPaths: ['src/components/UserCard.tsx'],
+          rules: [{ type: 'EXPORT_EXISTS', path: 'src/components/UserCard.tsx', value: 'UserCard' }],
+        },
+      },
+    });
+    const opened = await request(app).post(`/api/v1/learning/lessons/${lesson.id}/workspace`).set('Authorization', `Bearer ${student.token}`).expect(200);
+
+    const missing = await request(app)
+      .post(`/api/v1/learning/practice-steps/${checkpoint.id}/complete`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send({ workspaceId: opened.body.workspace.id })
+      .expect(200);
+
+    expect(missing.body.practiceProgress.verification.status).toBe('FAILED');
+    await expect(prisma.checkpointProgress.findUnique({
+      where: { studentId_checkpointId: { studentId: student.id, checkpointId: checkpoint.id } },
+    })).resolves.toBeNull();
+
+    await request(app)
+      .put(`/api/v1/workspaces/${opened.body.workspace.id}/files`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send({
+        files: [
+          { path: 'src/App.tsx', content: 'import { UserCard } from "./components/UserCard";\n' },
+          { path: 'src/components/UserCard.tsx', content: 'export function UserCard() { return null; }\n' },
+          { path: 'src/extra.ts', content: 'export const extra = true;\n' },
+        ],
+      })
+      .expect(200);
+
+    const passed = await request(app)
+      .post(`/api/v1/learning/practice-steps/${checkpoint.id}/complete`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send({ workspaceId: opened.body.workspace.id })
+      .expect(200);
+
+    expect(passed.body.practiceProgress).toMatchObject({
+      passed: true,
+      verification: { status: 'PASSED', verificationMode: VideoPracticeVerificationMode.WORKSPACE_STRUCTURE },
+    });
   });
 });

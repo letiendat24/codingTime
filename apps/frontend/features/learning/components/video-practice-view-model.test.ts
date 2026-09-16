@@ -5,17 +5,28 @@ import {
   codeAlongSplitColumns,
   codeAlongPermanentSurfaces,
   DEFAULT_VIDEO_SPLIT_RATIO,
+  findBlockingPracticeSeekStep,
   findPracticeStepCrossed,
   instructorSnapshotDoesNotOverwriteStudentCode,
+  DEFAULT_WORKSPACE_CAPABILITIES,
+  defaultVideoLearningMode,
+  isFolderNonEmpty,
   isCodeAlongRuntimeEnabled,
+  isSafeVirtualWorkspacePath,
   normalizeCodeForPracticeCompare,
+  normalizeVirtualWorkspacePath,
   parseStoredVideoLayoutMode,
+  parseStoredVideoLearningMode,
   parseStoredVideoSplitRatio,
+  pathConflictsWithExistingFile,
   practiceCheckpointState,
+  practiceReferenceSnapshotId,
   practiceTriggerSecondaryPanel,
   selectActiveInstructorSnapshot,
   shouldOpenLessonWorkspace,
   shouldPauseForPracticeStep,
+  VIDEO_CODE_ALONG_GRID_CLASS_NAME,
+  VIDEO_CODE_ALONG_VIDEO_PANE_CLASS_NAME,
 } from './video-practice-view-model';
 
 const steps: readonly VideoPracticeStep[] = [
@@ -24,6 +35,7 @@ const steps: readonly VideoPracticeStep[] = [
     lessonId: 'lesson-1',
     videoAssetId: 'video-1',
     timestampSeconds: 20,
+    timestampMs: 20_000,
     title: 'Setup',
     instruction: 'Create state',
     required: false,
@@ -33,6 +45,7 @@ const steps: readonly VideoPracticeStep[] = [
     targetFilePath: null,
     targetStartLine: null,
     targetEndLine: null,
+    verificationRules: null,
     status: 'NOT_STARTED',
     completed: false,
   },
@@ -41,6 +54,7 @@ const steps: readonly VideoPracticeStep[] = [
     lessonId: 'lesson-1',
     videoAssetId: 'video-1',
     timestampSeconds: 40,
+    timestampMs: 40_000,
     title: 'Loop',
     instruction: 'Implement loop',
     required: true,
@@ -50,6 +64,7 @@ const steps: readonly VideoPracticeStep[] = [
     targetFilePath: 'src/index.ts',
     targetStartLine: null,
     targetEndLine: null,
+    verificationRules: null,
     status: 'NOT_STARTED',
     completed: false,
   },
@@ -67,16 +82,24 @@ describe('video practice view model', () => {
 
   it('practice mode pauses once when crossing an incomplete step', () => {
     const triggered = new Set<string>();
-    const step = findPracticeStepCrossed(35, 42, steps, triggered);
+    const step = findPracticeStepCrossed(35_000, 42_000, steps, triggered);
     expect(shouldPauseForPracticeStep('PRACTICE', step)).toBe(true);
 
     triggered.add(step!.id);
-    expect(findPracticeStepCrossed(35, 42, steps, triggered)).toBeNull();
+    expect(findPracticeStepCrossed(35_000, 42_000, steps, triggered)).toBeNull();
   });
 
   it('follow mode never pauses for practice step crossings', () => {
-    const step = findPracticeStepCrossed(35, 42, steps, new Set());
+    const step = findPracticeStepCrossed(35_000, 42_000, steps, new Set());
     expect(shouldPauseForPracticeStep('FOLLOW', step)).toBe(false);
+  });
+
+  it('defaults to practice only when practice steps exist and restores user preference', () => {
+    expect(defaultVideoLearningMode(true)).toBe('PRACTICE');
+    expect(defaultVideoLearningMode(false)).toBe('FOLLOW');
+    expect(parseStoredVideoLearningMode('FOLLOW', true)).toBe('FOLLOW');
+    expect(parseStoredVideoLearningMode('PRACTICE', false)).toBe('PRACTICE');
+    expect(parseStoredVideoLearningMode('bad', true)).toBe('PRACTICE');
   });
 
   it('student code is not overwritten when instructor snapshot changes', () => {
@@ -89,7 +112,57 @@ describe('video practice view model', () => {
   });
 
   it('seeking across multiple steps selects the earliest crossed step deterministically', () => {
-    expect(findPracticeStepCrossed(10, 45, steps, new Set())?.id).toBe('step-20');
+    expect(findPracticeStepCrossed(10_000, 45_000, steps, new Set())?.id).toBe('step-20');
+  });
+
+  it('uses millisecond intervals so 42.7s to 43.4s triggers a 43s step', () => {
+    const stepAt43: VideoPracticeStep = {
+      ...steps[1]!,
+      id: 'step-43',
+      timestampSeconds: 43,
+      timestampMs: 43_000,
+    };
+
+    expect(findPracticeStepCrossed(42_700, 43_400, [stepAt43], new Set())?.id).toBe('step-43');
+  });
+
+  it('blocks large forward seeks at the first required incomplete practice step', () => {
+    expect(findPracticeStepCrossed(30_000, 60_000, steps, new Set())?.id).toBe('step-40');
+  });
+
+  it('practice required step blocks forward seek and clamps to the first incomplete required step', () => {
+    expect(findBlockingPracticeSeekStep('PRACTICE', 20_000, 80_000, steps)?.id).toBe('step-40');
+  });
+
+  it('allows backward practice seek', () => {
+    expect(findBlockingPracticeSeekStep('PRACTICE', 60_000, 20_000, steps)).toBeNull();
+  });
+
+  it('completed required step no longer blocks practice seek', () => {
+    const completed: VideoPracticeStep = { ...steps[1]!, status: 'COMPLETED', completed: true };
+    expect(findBlockingPracticeSeekStep('PRACTICE', 20_000, 80_000, [completed])).toBeNull();
+  });
+
+  it('follow mode allows unrestricted seek', () => {
+    expect(findBlockingPracticeSeekStep('FOLLOW', 20_000, 80_000, steps)).toBeNull();
+  });
+
+  it('multiple required practice steps block seek at the earliest one', () => {
+    const later: VideoPracticeStep = {
+      ...steps[1]!,
+      id: 'step-55',
+      timestampSeconds: 55,
+      timestampMs: 55_000,
+    };
+
+    expect(findBlockingPracticeSeekStep('PRACTICE', 20_000, 80_000, [later, steps[1]!])?.id).toBe('step-40');
+  });
+
+  it('does not retrigger completed or skipped practice steps', () => {
+    const completed: VideoPracticeStep = { ...steps[1]!, status: 'COMPLETED', completed: true };
+    const skipped: VideoPracticeStep = { ...steps[0]!, status: 'SKIPPED' };
+
+    expect(findPracticeStepCrossed(10_000, 60_000, [completed, skipped], new Set())).toBeNull();
   });
 
   it('keeps the editable student workspace enabled for snapshot-backed video code-along lessons', () => {
@@ -155,6 +228,26 @@ describe('video practice view model', () => {
     expect(practiceTriggerSecondaryPanel()).toBeNull();
   });
 
+  it('uses the configured practice snapshot instead of the generic playback snapshot', () => {
+    const activeStep: VideoPracticeStep = {
+      ...steps[1]!,
+      snapshotId: 'snapshot-practice-43',
+      timestampSeconds: 43,
+      timestampMs: 43_000,
+    };
+
+    expect(practiceReferenceSnapshotId(activeStep, 'snapshot-playback-25')).toBe('snapshot-practice-43');
+    expect(practiceReferenceSnapshotId(null, 'snapshot-playback-25')).toBe('snapshot-playback-25');
+  });
+
+  it('keeps video top-aligned and prevents the video pane from stretching black filler to editor height', () => {
+    expect(VIDEO_CODE_ALONG_GRID_CLASS_NAME).toContain('xl:items-start');
+    expect(VIDEO_CODE_ALONG_VIDEO_PANE_CLASS_NAME).toContain('self-start');
+    expect(VIDEO_CODE_ALONG_VIDEO_PANE_CLASS_NAME).toContain('bg-card');
+    expect(VIDEO_CODE_ALONG_VIDEO_PANE_CLASS_NAME).not.toContain('h-full');
+    expect(VIDEO_CODE_ALONG_VIDEO_PANE_CLASS_NAME).not.toContain('bg-black');
+  });
+
   it('models explicit practice checkpoint states', () => {
     expect(practiceCheckpointState({
       hasActiveStep: true,
@@ -191,5 +284,23 @@ describe('video practice view model', () => {
       isSkipped: true,
       hasFailure: false,
     })).toBe('SKIPPED');
+  });
+
+  it('keeps workspace capabilities explicit for the student toolbar', () => {
+    expect(DEFAULT_WORKSPACE_CAPABILITIES.allowRun).toBe(true);
+    expect(DEFAULT_WORKSPACE_CAPABILITIES.allowJudge).toBe(true);
+    expect(DEFAULT_WORKSPACE_CAPABILITIES.allowCreateFiles).toBe(false);
+  });
+
+  it('validates virtual workspace paths for file explorer mutations', () => {
+    const files: readonly WorkspaceFile[] = [{ path: 'src/App.tsx', content: '' }];
+
+    expect(normalizeVirtualWorkspacePath('/src//components/UserCard.tsx')).toBe('src/components/UserCard.tsx');
+    expect(isSafeVirtualWorkspacePath('src/components/UserCard.tsx')).toBe(true);
+    expect(isSafeVirtualWorkspacePath('../secret')).toBe(false);
+    expect(isSafeVirtualWorkspacePath('/absolute')).toBe(false);
+    expect(isSafeVirtualWorkspacePath('src\\App.tsx')).toBe(false);
+    expect(pathConflictsWithExistingFile('src/App.tsx', files)).toBe(true);
+    expect(isFolderNonEmpty('src', files)).toBe(true);
   });
 });

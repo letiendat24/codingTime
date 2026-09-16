@@ -123,12 +123,20 @@ enum CheckpointProgressStatus {
 enum VideoPracticeVerificationMode {
   NONE
   CODE_COMPARE
+  FILE_COMPARE
+  STRUCTURAL
+  WORKSPACE_STRUCTURE
   TESTS
 }
 
 enum VideoPracticeBehavior {
   GUIDED
   REQUIRED
+}
+
+enum VideoWorkspaceType {
+  SINGLE_FILE
+  MULTI_FILE
 }
 
 enum ExecutionStatus {
@@ -429,6 +437,15 @@ model VideoCodeAlongConfig {
   enabled   Boolean  @default(false)
   language  String
   entryFile String?
+  workspaceType VideoWorkspaceType @default(SINGLE_FILE)
+  allowEditFiles Boolean @default(true)
+  allowCreateFiles Boolean @default(false)
+  allowCreateFolders Boolean @default(false)
+  allowRenameFiles Boolean @default(false)
+  allowDeleteFiles Boolean @default(false)
+  allowRun Boolean @default(true)
+  allowCheck Boolean @default(true)
+  allowJudge Boolean @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -758,6 +775,7 @@ model VideoCheckpoint {
   practiceTargetFilePath String?
   practiceTargetStartLine Int?
   practiceTargetEndLine Int?
+  practiceVerificationRulesJson Json?
   position         Int                 @default(0)
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt

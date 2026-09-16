@@ -1,16 +1,17 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Check, Columns, Download, FileCode, History, MoreHorizontal, Play, Send, ShieldCheck, Terminal } from 'lucide-react';
+import { Check, Columns, Download, FileCode, FilePlus, FolderPlus, History, MoreHorizontal, Pencil, Play, Send, ShieldCheck, Terminal, Trash2 } from 'lucide-react';
 import { Badge, Button, Dialog, StatusBadge } from '../../../design-system';
 import type {
   CodeSnapshotDetail,
   ExecutionDetail,
   JudgeSubmissionDetail,
   Workspace,
+  WorkspaceCapabilities,
   WorkspaceFile,
   WorkspaceRevision,
 } from '../../../lib/api';
@@ -20,6 +21,13 @@ import { useI18n } from '../../../providers/i18n-provider';
 import { useTheme } from '../../../providers/theme-provider';
 import { useToast } from '../../../providers/toast-provider';
 import { DiffModal } from './diff-modal';
+import {
+  DEFAULT_WORKSPACE_CAPABILITIES,
+  isFolderNonEmpty,
+  isSafeVirtualWorkspacePath,
+  normalizeVirtualWorkspacePath,
+  pathConflictsWithExistingFile,
+} from './video-practice-view-model';
 
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
 
@@ -31,6 +39,9 @@ export interface StudentWorkspaceProps {
   readonly onPass?: (() => void) | undefined;
   readonly editorHeight?: string | undefined;
   readonly compareSignal?: number | undefined;
+  readonly onRegisterSave?: ((save: (() => Promise<void>) | null) => void) | undefined;
+  readonly capabilities?: WorkspaceCapabilities | undefined;
+  readonly workspaceType?: 'SINGLE_FILE' | 'MULTI_FILE' | undefined;
 }
 
 export function StudentWorkspace({
@@ -41,6 +52,9 @@ export function StudentWorkspace({
   onPass,
   editorHeight = '420px',
   compareSignal,
+  onRegisterSave,
+  capabilities = DEFAULT_WORKSPACE_CAPABILITIES,
+  workspaceType = 'SINGLE_FILE',
 }: StudentWorkspaceProps) {
   const queryClient = useQueryClient();
   const { t } = useI18n();
@@ -187,6 +201,21 @@ export function StudentWorkspace({
   });
 
   const hasNotifiedPassRef = useRef(false);
+  const draftFilesRef = useRef<readonly WorkspaceFile[]>([]);
+
+  useEffect(() => {
+    draftFilesRef.current = draftFiles;
+  }, [draftFiles]);
+
+  const saveCurrentDraft = useCallback(async () => {
+    await saveWorkspace.mutateAsync(draftFilesRef.current);
+  }, [saveWorkspace.mutateAsync]);
+
+  useEffect(() => {
+    onRegisterSave?.(saveCurrentDraft);
+    return () => onRegisterSave?.(null);
+  }, [onRegisterSave, saveCurrentDraft]);
+
   useEffect(() => {
     if (submission.data?.passed && !hasNotifiedPassRef.current) {
       hasNotifiedPassRef.current = true;
@@ -206,9 +235,78 @@ export function StudentWorkspace({
 
   function updateActiveFileContent(content: string) {
     if (!activeFile) return;
+    if (!capabilities.allowEditFiles) return;
     setDraftFiles((files) =>
       files.map((file) => (file.path === activeFile.path ? { ...file, content } : file)),
     );
+  }
+
+  function addFile(defaultPath = '') {
+    if (!capabilities.allowCreateFiles || typeof window === 'undefined') return;
+    const input = window.prompt('New file path', defaultPath || 'src/new-file.ts');
+    if (!input) return;
+    const path = normalizeVirtualWorkspacePath(input);
+
+    if (!isSafeVirtualWorkspacePath(input) || pathConflictsWithExistingFile(path, draftFiles)) {
+      toast.error('Invalid file path', 'Use a unique relative project path.');
+      return;
+    }
+
+    setDraftFiles((files) => [...files, { path, content: '' }].sort((a, b) => a.path.localeCompare(b.path)));
+    setSelectedPath(path);
+  }
+
+  function addFolder() {
+    if (!capabilities.allowCreateFolders || typeof window === 'undefined') return;
+    const input = window.prompt('New folder path', 'src/components');
+    if (!input) return;
+    const folderPath = normalizeVirtualWorkspacePath(input).replace(/\/$/, '');
+
+    if (!isSafeVirtualWorkspacePath(input)) {
+      toast.error('Invalid folder path', 'Use a safe relative project path.');
+      return;
+    }
+
+    const markerPath = `${folderPath}/.gitkeep`;
+    if (pathConflictsWithExistingFile(markerPath, draftFiles)) {
+      toast.error('Folder already exists', 'Choose another virtual folder path.');
+      return;
+    }
+
+    setDraftFiles((files) => [...files, { path: markerPath, content: '' }].sort((a, b) => a.path.localeCompare(b.path)));
+    setSelectedPath(markerPath);
+  }
+
+  function renamePath(path: string) {
+    if (!capabilities.allowRenameFiles || typeof window === 'undefined') return;
+    const input = window.prompt('Rename path', path);
+    if (!input || input === path) return;
+    const nextPath = normalizeVirtualWorkspacePath(input);
+
+    if (!isSafeVirtualWorkspacePath(input) || pathConflictsWithExistingFile(nextPath, draftFiles)) {
+      toast.error('Invalid file path', 'Use a unique relative project path.');
+      return;
+    }
+
+    setDraftFiles((files) => files.map((file) => (file.path === path ? { ...file, path: nextPath } : file)).sort((a, b) => a.path.localeCompare(b.path)));
+    setSelectedPath(nextPath);
+  }
+
+  function deletePath(path: string) {
+    if (!capabilities.allowDeleteFiles || typeof window === 'undefined') return;
+    const folderLike = isFolderNonEmpty(path, draftFiles);
+    const message = folderLike
+      ? `Delete folder ${path} and all files inside it?`
+      : `Delete ${path}?`;
+    if (!window.confirm(message)) return;
+
+    setDraftFiles((files) => {
+      const remaining = files.filter((file) => (folderLike ? !file.path.startsWith(`${path.replace(/\/$/, '')}/`) : file.path !== path));
+      if (selectedPath === path || !remaining.some((file) => file.path === selectedPath)) {
+        setSelectedPath(remaining[0]?.path ?? null);
+      }
+      return remaining.length > 0 ? remaining : files;
+    });
   }
 
   const testResults = submission.data?.result?.testResults ?? [];
@@ -264,32 +362,36 @@ export function StudentWorkspace({
 
           {/* Action Controls */}
           <div className="flex items-center gap-2 ml-auto">
-            <Button
-              size="sm"
-              variant="secondary"
-              isLoading={runWorkspace.isPending || execution.data?.status === 'RUNNING'}
-              onClick={() => {
-                setResultTab('output');
-                runWorkspace.mutate();
-              }}
-              className="h-8 text-xs font-semibold"
-            >
-              <Play className="h-3.5 w-3.5 mr-1 text-emerald-600 dark:text-emerald-400" />
-              <span>{t('common.run')}</span>
-            </Button>
+            {capabilities.allowRun ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                isLoading={runWorkspace.isPending || execution.data?.status === 'RUNNING'}
+                onClick={() => {
+                  setResultTab('output');
+                  runWorkspace.mutate();
+                }}
+                className="h-8 text-xs font-semibold"
+              >
+                <Play className="h-3.5 w-3.5 mr-1 text-emerald-600 dark:text-emerald-400" />
+                <span>{t('common.run')}</span>
+              </Button>
+            ) : null}
 
-            <Button
-              size="sm"
-              isLoading={submitWorkspace.isPending || submission.data?.status === 'RUNNING'}
-              onClick={() => {
-                setResultTab('judge');
-                submitWorkspace.mutate();
-              }}
-              className="h-8 text-xs font-semibold shadow-xs"
-            >
-              <Send className="h-3.5 w-3.5 mr-1" />
-              <span>{t('learning.submitJudge')}</span>
-            </Button>
+            {capabilities.allowJudge ? (
+              <Button
+                size="sm"
+                isLoading={submitWorkspace.isPending || submission.data?.status === 'RUNNING'}
+                onClick={() => {
+                  setResultTab('judge');
+                  submitWorkspace.mutate();
+                }}
+                className="h-8 text-xs font-semibold shadow-xs"
+              >
+                <Send className="h-3.5 w-3.5 mr-1" />
+                <span>{t('learning.submitJudge')}</span>
+              </Button>
+            ) : null}
 
             <details className="relative">
               <summary className="inline-flex h-8 cursor-pointer list-none items-center gap-1.5 rounded-lg border border-border/80 bg-card px-2.5 text-xs font-semibold text-foreground shadow-2xs transition-colors hover:bg-muted/70">
@@ -329,31 +431,78 @@ export function StudentWorkspace({
         </div>
 
         {/* Monaco Editor Canvas */}
-        <div className="relative">
-          <MonacoEditor
-            height={editorHeight}
-            language={workspace.data?.language === 'javascript' ? 'javascript' : 'plaintext'}
-            theme={resolvedTheme === 'dark' ? 'vs-dark' : 'light'}
-            value={activeFile?.content ?? ''}
-            onChange={(value) => updateActiveFileContent(value ?? '')}
-            options={{
-              minimap: { enabled: false },
-              fontSize: 13,
-              tabSize: 2,
-              lineNumbersMinChars: 3,
-              scrollBeyondLastLine: false,
-              padding: { top: 10, bottom: 10 },
-              automaticLayout: true,
-            }}
-          />
+        <div className={workspaceType === 'MULTI_FILE' ? 'grid min-h-0 md:grid-cols-[260px_minmax(0,1fr)]' : 'relative'}>
+          {workspaceType === 'MULTI_FILE' ? (
+            <aside className="border-b border-border bg-muted/20 p-2 md:border-b-0 md:border-r">
+              <div className="mb-2 flex items-center justify-between gap-1">
+                <span className="text-[11px] font-semibold text-muted-foreground">Files</span>
+                <div className="flex gap-1">
+                  {capabilities.allowCreateFiles ? (
+                    <button type="button" onClick={() => addFile()} className="rounded p-1 hover:bg-muted" aria-label="New file">
+                      <FilePlus className="h-3.5 w-3.5" />
+                    </button>
+                  ) : null}
+                  {capabilities.allowCreateFolders ? (
+                    <button type="button" onClick={addFolder} className="rounded p-1 hover:bg-muted" aria-label="New folder">
+                      <FolderPlus className="h-3.5 w-3.5" />
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <div className="max-h-64 space-y-1 overflow-auto md:max-h-[520px]">
+                {draftFiles.map((file) => {
+                  const isActive = file.path === activeFile?.path;
+                  return (
+                    <div key={file.path} className={`group flex items-center gap-1 rounded-md px-2 py-1.5 text-xs ${isActive ? 'bg-card text-foreground shadow-2xs' : 'text-muted-foreground hover:bg-muted/70'}`}>
+                      <button type="button" onClick={() => setSelectedPath(file.path)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+                        <FileCode className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate font-mono">{file.path}</span>
+                      </button>
+                      {capabilities.allowRenameFiles ? (
+                        <button type="button" onClick={() => renamePath(file.path)} className="hidden rounded p-1 hover:bg-muted group-hover:inline-flex" aria-label="Rename file">
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                      ) : null}
+                      {capabilities.allowDeleteFiles ? (
+                        <button type="button" onClick={() => deletePath(file.path)} className="hidden rounded p-1 text-destructive hover:bg-destructive/10 group-hover:inline-flex" aria-label="Delete file">
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </aside>
+          ) : null}
+          <div className="relative min-w-0">
+            <MonacoEditor
+              height={editorHeight}
+              language={workspace.data?.language === 'javascript' ? 'javascript' : workspace.data?.language === 'typescript' ? 'typescript' : 'plaintext'}
+              theme={resolvedTheme === 'dark' ? 'vs-dark' : 'light'}
+              value={activeFile?.content ?? ''}
+              onChange={(value) => updateActiveFileContent(value ?? '')}
+              options={{
+                readOnly: !capabilities.allowEditFiles,
+                minimap: { enabled: false },
+                fontSize: 13,
+                tabSize: 2,
+                lineNumbersMinChars: 3,
+                scrollBeyondLastLine: false,
+                padding: { top: 10, bottom: 10 },
+                automaticLayout: true,
+              }}
+            />
+          </div>
         </div>
       </div>
 
       {/* Output / Judge Station Panel */}
+      {capabilities.allowRun || capabilities.allowJudge ? (
       <div className="overflow-hidden rounded-xl border border-border/70 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.03)]">
         {/* Tab Headers */}
         <div className="flex items-center justify-between border-b border-border/60 bg-muted/30 px-3">
           <div className="flex items-center gap-1">
+            {capabilities.allowRun ? (
             <button
               type="button"
               onClick={() => setResultTab('output')}
@@ -371,7 +520,9 @@ export function StudentWorkspace({
                 </span>
               ) : null}
             </button>
+            ) : null}
 
+            {capabilities.allowJudge ? (
             <button
               type="button"
               onClick={() => setResultTab('judge')}
@@ -393,6 +544,7 @@ export function StudentWorkspace({
                 </span>
               ) : null}
             </button>
+            ) : null}
           </div>
 
           <div className="text-[11px] text-muted-foreground font-sans pr-1">
@@ -407,7 +559,7 @@ export function StudentWorkspace({
         {/* Panel Content Body */}
         <div className="p-3.5 max-h-[300px] overflow-y-auto font-mono text-xs">
           <AnimatePresence mode="wait">
-            {resultTab === 'output' ? (
+            {resultTab === 'output' && capabilities.allowRun ? (
               <motion.div
                 key="output-tab"
                 initial={{ opacity: 0, y: 4 }}
@@ -451,7 +603,7 @@ export function StudentWorkspace({
                   </div>
                 )}
               </motion.div>
-            ) : (
+            ) : capabilities.allowJudge ? (
               <motion.div
                 key="judge-tab"
                 initial={{ opacity: 0, y: 4 }}
@@ -544,10 +696,11 @@ export function StudentWorkspace({
                   </div>
                 )}
               </motion.div>
-            )}
+            ) : null}
           </AnimatePresence>
         </div>
       </div>
+      ) : null}
 
       {/* Compare Modal */}
       {showDiff ? (

@@ -2,6 +2,7 @@ import {
   CheckpointProgressStatus,
   CourseStatus,
   EnrollmentStatus,
+  JudgeSubmissionStatus,
   LearningActivityType,
   LessonType,
   VideoAssetStatus,
@@ -161,6 +162,15 @@ export class VideoLearningRepository {
         enabled: data.enabled as boolean,
         language: data.language,
         entryFile: data.entryFile ?? null,
+        workspaceType: data.workspaceType ?? 'SINGLE_FILE',
+        allowEditFiles: data.allowEditFiles ?? true,
+        allowCreateFiles: data.allowCreateFiles ?? false,
+        allowCreateFolders: data.allowCreateFolders ?? false,
+        allowRenameFiles: data.allowRenameFiles ?? false,
+        allowDeleteFiles: data.allowDeleteFiles ?? false,
+        allowRun: data.allowRun ?? true,
+        allowCheck: data.allowCheck ?? true,
+        allowJudge: data.allowJudge ?? true,
       },
     });
   }
@@ -287,6 +297,25 @@ export class VideoLearningRepository {
     return this.prisma.workspace.findFirst({
       where: { id: workspaceId, userId: studentId, lessonId, checkpointId: null, practiceProblemId: null },
       include: { files: { orderBy: { path: 'asc' } } },
+    });
+  }
+
+  async findLatestCompletedJudgeSubmissionForWorkspace(studentId: string, workspaceId: string) {
+    return this.prisma.judgeSubmission.findFirst({
+      where: {
+        userId: studentId,
+        workspaceId,
+        status: {
+          in: [
+            JudgeSubmissionStatus.ACCEPTED,
+            JudgeSubmissionStatus.REJECTED,
+            JudgeSubmissionStatus.FAILED,
+            JudgeSubmissionStatus.TIMED_OUT,
+          ],
+        },
+      },
+      orderBy: { submittedAt: 'desc' },
+      include: { result: true },
     });
   }
 

@@ -162,7 +162,7 @@ function CoursesPageContent() {
             {activeEnrolled.slice(0, 3).map((enrollment) => (
               <Link
                 key={enrollment.enrollmentId}
-                href={`/courses/${enrollment.course.slug}/learn`}
+                href={`/courses/${enrollment.course.slug}`}
                 className="group flex flex-col justify-between rounded-xl border border-border/70 bg-card p-4 shadow-[0_1px_3px_rgba(0,0,0,0.03)] transition-all hover:-translate-y-0.5 hover:shadow-sm"
               >
                 <div>

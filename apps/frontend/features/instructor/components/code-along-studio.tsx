@@ -92,6 +92,14 @@ export function CodeAlongStudio({
   const [enabled, setEnabled] = useState(true);
   const [language, setLanguage] = useState('typescript');
   const [entryFile, setEntryFile] = useState('src/index.ts');
+  const [workspaceType, setWorkspaceType] = useState<'SINGLE_FILE' | 'MULTI_FILE'>('SINGLE_FILE');
+  const [allowRun, setAllowRun] = useState(true);
+  const [allowCheck, setAllowCheck] = useState(true);
+  const [allowJudge, setAllowJudge] = useState(true);
+  const [allowCreateFiles, setAllowCreateFiles] = useState(false);
+  const [allowCreateFolders, setAllowCreateFolders] = useState(false);
+  const [allowRenameFiles, setAllowRenameFiles] = useState(false);
+  const [allowDeleteFiles, setAllowDeleteFiles] = useState(false);
 
   // Multi-File Snapshot Authoring State
   const [isCreatingSnapshot, setIsCreatingSnapshot] = useState(false);
@@ -104,7 +112,7 @@ export function CodeAlongStudio({
   const [isAddingFile, setIsAddingFile] = useState(false);
   const [practiceEnabled, setPracticeEnabled] = useState(false);
   const [practiceInstruction, setPracticeInstruction] = useState('');
-  const [practiceVerificationMode, setPracticeVerificationMode] = useState<'NONE' | 'CODE_COMPARE' | 'TESTS'>('NONE');
+  const [practiceVerificationMode, setPracticeVerificationMode] = useState<'NONE' | 'CODE_COMPARE' | 'FILE_COMPARE' | 'STRUCTURAL' | 'WORKSPACE_STRUCTURE' | 'TESTS'>('NONE');
   const [practiceBehavior, setPracticeBehavior] = useState<'GUIDED' | 'REQUIRED'>('GUIDED');
 
   // Query existing snapshots
@@ -124,7 +132,20 @@ export function CodeAlongStudio({
     mutationFn: (nextEnabled: boolean) =>
       requestJson(`/instructor/lessons/${lessonId}/code-along`, {
         method: 'PUT',
-        body: JSON.stringify({ enabled: nextEnabled, language, entryFile }),
+        body: JSON.stringify({
+          enabled: nextEnabled,
+          language,
+          entryFile,
+          workspaceType,
+          allowEditFiles: true,
+          allowCreateFiles,
+          allowCreateFolders,
+          allowRenameFiles,
+          allowDeleteFiles,
+          allowRun,
+          allowCheck,
+          allowJudge,
+        }),
       }),
     onSuccess: () => {
       toast.success('Code-along configuration saved');
@@ -183,6 +204,11 @@ export function CodeAlongStudio({
             practiceBehavior,
             practiceSnapshotId: saved.codeSnapshot.id,
             practiceTargetFilePath: activeFilePath,
+            practiceVerificationRules: practiceVerificationMode === 'WORKSPACE_STRUCTURE'
+              ? { requiredPaths: files.map((file) => file.path), rules: [{ type: 'FILE_EXISTS', path: activeFilePath }] }
+              : practiceVerificationMode === 'STRUCTURAL'
+                ? { rules: [{ type: 'FILE_EXISTS', path: activeFilePath }] }
+                : null,
           }),
         });
       }
@@ -377,6 +403,45 @@ export function CodeAlongStudio({
         </div>
       </div>
 
+      <div className="grid gap-4 rounded-xl border border-border/70 bg-card p-4 shadow-[0_1px_3px_rgba(0,0,0,0.02)] lg:grid-cols-[220px_minmax(0,1fr)]">
+        <div>
+          <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Student Workspace</label>
+          <Select
+            value={workspaceType}
+            onChange={(event) => {
+              setWorkspaceType(event.target.value as typeof workspaceType);
+              saveConfig.mutate(enabled);
+            }}
+            options={[
+              { label: 'Single file', value: 'SINGLE_FILE' },
+              { label: 'Multi-file project', value: 'MULTI_FILE' },
+            ]}
+          />
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          {([
+            ['Run', allowRun, setAllowRun],
+            ['Check', allowCheck, setAllowCheck],
+            ['Judge', allowJudge, setAllowJudge],
+            ['Create files', allowCreateFiles, setAllowCreateFiles],
+            ['Create folders', allowCreateFolders, setAllowCreateFolders],
+            ['Rename', allowRenameFiles, setAllowRenameFiles],
+            ['Delete', allowDeleteFiles, setAllowDeleteFiles],
+          ] as const).map(([label, value, setter]) => (
+            <label key={label} className="flex items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-xs font-medium text-foreground">
+              <span>{label}</span>
+              <Switch
+                checked={value}
+                onCheckedChange={(checked) => {
+                  setter(checked);
+                  saveConfig.mutate(enabled);
+                }}
+              />
+            </label>
+          ))}
+        </div>
+      </div>
+
       {/* Timeline Milestones Section */}
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -490,10 +555,22 @@ export function CodeAlongStudio({
                         onChange={(event) => setPracticeVerificationMode(event.target.value as typeof practiceVerificationMode)}
                         options={[
                           { label: 'None', value: 'NONE' },
-                          { label: 'Compare Code', value: 'CODE_COMPARE' },
+                          { label: 'File Compare', value: 'FILE_COMPARE' },
+                          { label: 'Structural', value: 'STRUCTURAL' },
+                          { label: 'Workspace Structure', value: 'WORKSPACE_STRUCTURE' },
                           { label: 'Run Tests', value: 'TESTS' },
                         ]}
                       />
+                      {practiceVerificationMode === 'CODE_COMPARE' || practiceVerificationMode === 'FILE_COMPARE' ? (
+                        <p className="mt-1 text-[11px] text-muted-foreground">
+                          Reference snapshot: the instructor snapshot saved for this milestone.
+                        </p>
+                      ) : null}
+                      {practiceVerificationMode === 'STRUCTURAL' || practiceVerificationMode === 'WORKSPACE_STRUCTURE' ? (
+                        <p className="mt-1 text-[11px] text-muted-foreground">
+                          Initial rules are generated from the active file/snapshot and can be expanded later.
+                        </p>
+                      ) : null}
                     </div>
                     <div>
                       <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Behavior</label>

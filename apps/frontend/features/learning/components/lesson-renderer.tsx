@@ -30,10 +30,12 @@ import {
   type StudentTranscript,
   type StudentTranscriptTrack,
   type ProjectSubmissionDetail,
+  type PracticeStepCompletion,
   type VideoCheckpoint,
   type VideoPracticeStep,
   type VideoPlayback,
   type Workspace,
+  ApiError,
   requestJson,
 } from '../../../lib/api';
 import { formatTime, selectSnapshotAtOrBefore } from '../../../lib/video-learning';
@@ -57,13 +59,20 @@ import { TranscriptPanel } from './transcript-panel';
 import { preferredTranscriptTrackId, subtitleTextForTime } from './transcript-view-model';
 import {
   findPracticeStepCrossed,
+  findBlockingPracticeSeekStep,
   codeAlongSplitColumns,
   DEFAULT_VIDEO_SPLIT_RATIO,
+  DEFAULT_WORKSPACE_CAPABILITIES,
   isCodeAlongRuntimeEnabled,
+  parseStoredVideoLearningMode,
   parseStoredVideoLayoutMode,
   parseStoredVideoSplitRatio,
+  practiceReferenceSnapshotId,
   shouldOpenLessonWorkspace,
   shouldPauseForPracticeStep,
+  VIDEO_CODE_ALONG_CODE_PANE_CLASS_NAME,
+  VIDEO_CODE_ALONG_GRID_CLASS_NAME,
+  VIDEO_CODE_ALONG_VIDEO_PANE_CLASS_NAME,
   VIDEO_CODE_LAYOUT_STORAGE_KEY,
   VIDEO_CODE_SPLIT_STORAGE_KEY,
   type VideoCodeAlongLayoutMode,
@@ -256,8 +265,9 @@ function VideoLessonView({
   const [mobileMode, setMobileMode] = useState<'video' | 'instructor' | 'code' | 'transcript' | 'output'>('video');
   const [secondaryPanel, setSecondaryPanel] = useState<'transcript' | 'timeline' | 'instructor' | null>(null);
   const [currentSecond, setCurrentSecond] = useState(0);
-  const previousPracticeSecondRef = useRef(0);
+  const previousPracticeTimeMsRef = useRef(0);
   const triggeredPracticeIdsRef = useRef(new Set<string>());
+  const savePracticeWorkspaceRef = useRef<(() => Promise<void>) | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [requestedSeekSecond, setRequestedSeekSecond] = useState<number | null>(null);
@@ -301,6 +311,8 @@ function VideoLessonView({
     enabled: isCodeAlongRuntime,
     queryFn: () => requestJson<{ readonly practiceSteps: readonly VideoPracticeStep[] }>(`/learning/lessons/${lesson.id}/practice-steps`),
   });
+  const hasPracticeSteps = (practiceSteps.data?.practiceSteps.length ?? 0) > 0;
+  const workspaceCapabilities = codeAlong.data?.capabilities ?? DEFAULT_WORKSPACE_CAPABILITIES;
 
   const transcriptTracks = useQuery({
     queryKey: queryKeys.learning.transcriptTracks(lesson.id),
@@ -345,23 +357,42 @@ function VideoLessonView({
 
   const completePracticeStep = useMutation({
     mutationFn: (step: VideoPracticeStep) =>
-      requestJson(`/learning/practice-steps/${step.id}/complete`, {
+      requestJson<PracticeStepCompletion>(`/learning/practice-steps/${step.id}/complete`, {
         method: 'POST',
         body: JSON.stringify({ workspaceId }),
       }),
     onMutate: () => {
       setPracticeCheckError(null);
     },
-    onSuccess: (_data, step) => {
+    onSuccess: (data, step) => {
+      if (data.verification.status !== 'PASSED') {
+        const details = data.verification.details.join(' ');
+        setPracticeCheckError(data.verification.status === 'FAILED'
+          ? details || 'Not complete yet.'
+          : details || 'Unable to verify this step right now.');
+        return;
+      }
+
       toast.success('Practice step completed');
       setCompletedPracticeStepId(step.id);
       setSkippedPracticeStepId(null);
+      setPracticeCheckError(null);
       void queryClient.invalidateQueries({ queryKey: queryKeys.learning.practiceSteps(lesson.id) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.learning.video(lesson.id) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.courses.progress(courseId) });
     },
     onError: (error) => {
-      setPracticeCheckError(error instanceof Error ? error.message : 'Not completed yet');
+      if (error instanceof ApiError && error.code === 'COMPARE_UNAVAILABLE') {
+        setPracticeCheckError('Unable to compare this step right now.');
+        return;
+      }
+
+      if (error instanceof ApiError && error.code === 'COMPARE_MISMATCH') {
+        setPracticeCheckError('Your code does not match this step yet.');
+        return;
+      }
+
+      setPracticeCheckError(error instanceof Error ? error.message : 'Unable to check this step right now.');
     },
   });
 
@@ -418,7 +449,7 @@ function VideoLessonView({
   useEffect(() => {
     hasAttemptedWorkspaceRef.current = false;
     triggeredPracticeIdsRef.current = new Set();
-    previousPracticeSecondRef.current = 0;
+    previousPracticeTimeMsRef.current = 0;
     setWorkspaceId(null);
     setWorkspaceError(null);
     setActivePracticeStep(null);
@@ -426,6 +457,28 @@ function VideoLessonView({
     setSkippedPracticeStepId(null);
     setPracticeCheckError(null);
     setSecondaryPanel(null);
+  }, [lesson.id]);
+
+  useEffect(() => {
+    if (!practiceSteps.isSuccess) {
+      return;
+    }
+
+    const storageKey = `codesync.video.learningMode.${lesson.id}`;
+    const stored = typeof window === 'undefined' ? null : window.localStorage.getItem(storageKey);
+    setLearningMode(parseStoredVideoLearningMode(stored, hasPracticeSteps));
+  }, [hasPracticeSteps, lesson.id, practiceSteps.isSuccess]);
+
+  const handleLearningModeChange = useCallback((mode: VideoLearningMode) => {
+    setLearningMode(mode);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(`codesync.video.learningMode.${lesson.id}`, mode);
+    }
+
+    if (mode === 'FOLLOW') {
+      setActivePracticeStep(null);
+      setPracticeCheckError(null);
+    }
   }, [lesson.id]);
 
   useEffect(() => {
@@ -500,6 +553,14 @@ function VideoLessonView({
     if (snapshots.length === 0) return undefined;
     return selectSnapshotAtOrBefore(currentSecond, snapshots);
   }, [currentSecond, snapshots]);
+  const referenceSnapshotId = practiceReferenceSnapshotId(activePracticeStep, selectedSnapshot?.id);
+  const actionablePracticeSteps = useMemo(
+    () => (practiceSteps.data?.practiceSteps ?? []).filter((step) =>
+      step.id !== completedPracticeStepId
+      && step.id !== skippedPracticeStepId),
+    [completedPracticeStepId, practiceSteps.data?.practiceSteps, skippedPracticeStepId],
+  );
+  const activePracticeStepCompleted = Boolean(activePracticeStep && completedPracticeStepId === activePracticeStep.id);
   const subtitleText = subtitlesEnabled ? subtitleTextForTime(transcript.data?.transcript, currentSecond) : null;
 
   useEffect(() => {
@@ -539,11 +600,11 @@ function VideoLessonView({
   }, [lesson.id, selectedTranscriptId, subtitlesEnabled, transcriptTracks.data?.transcripts]);
 
   const snapshotDetail = useQuery({
-    queryKey: queryKeys.learning.snapshot(selectedSnapshot?.id),
-    enabled: Boolean(selectedSnapshot?.id),
+    queryKey: queryKeys.learning.snapshot(referenceSnapshotId),
+    enabled: Boolean(referenceSnapshotId),
     queryFn: async () => {
       const response = await requestJson<{ readonly codeSnapshot: CodeSnapshotDetail }>(
-        `/learning/code-snapshots/${selectedSnapshot?.id}`,
+        `/learning/code-snapshots/${referenceSnapshotId}`,
       );
       return response.codeSnapshot;
     },
@@ -557,31 +618,86 @@ function VideoLessonView({
     [progressMutation.mutate, video.data?.videoAssetId],
   );
 
+  const activatePracticeStep = useCallback((step: VideoPracticeStep) => {
+    triggeredPracticeIdsRef.current.add(step.id);
+    setActivePracticeStep(step);
+    setCompletedPracticeStepId(null);
+    setSkippedPracticeStepId(null);
+    setPracticeCheckError(null);
+    setSecondaryPanel(null);
+    setRequestedSeekSecond(step.timestampSeconds);
+    setTimeout(() => setRequestedSeekSecond(null), 100);
+    setPracticePauseSignal((value) => value + 1);
+    setMobileMode('code');
+  }, []);
+
+  const handlePracticeSeekRequest = useCallback((input: { readonly currentSeconds: number; readonly requestedSeconds: number }) => {
+    if (
+      input.requestedSeconds < input.currentSeconds
+      && activePracticeStep
+      && !activePracticeStepCompleted
+      && input.requestedSeconds < activePracticeStep.timestampSeconds
+    ) {
+      triggeredPracticeIdsRef.current.delete(activePracticeStep.id);
+      setActivePracticeStep(null);
+      setPracticeCheckError(null);
+    }
+
+    if (
+      activePracticeStep
+      && !activePracticeStepCompleted
+      && input.requestedSeconds > activePracticeStep.timestampSeconds
+    ) {
+      return activePracticeStep.timestampSeconds;
+    }
+
+    const step = findBlockingPracticeSeekStep(
+      learningMode,
+      Math.floor(input.currentSeconds * 1000),
+      Math.floor(input.requestedSeconds * 1000),
+      actionablePracticeSteps,
+    );
+
+    if (!step) {
+      return input.requestedSeconds;
+    }
+
+    activatePracticeStep(step);
+    return step.timestampSeconds;
+  }, [activatePracticeStep, actionablePracticeSteps, activePracticeStep, activePracticeStepCompleted, learningMode]);
+
+  const handlePracticeCheck = useCallback(async (step: VideoPracticeStep) => {
+    setPracticeCheckError(null);
+
+    try {
+      await savePracticeWorkspaceRef.current?.();
+      completePracticeStep.mutate(step);
+    } catch {
+      setPracticeCheckError('Unable to compare this step right now.');
+    }
+  }, [completePracticeStep.mutate]);
+
   const handleTimeChange = useCallback((positionSeconds: number) => {
     const nextSecond = Math.floor(positionSeconds);
+    const nextTimeMs = Math.max(0, Math.floor(positionSeconds * 1000));
     setCurrentSecond((previous) => {
       return previous === nextSecond ? previous : nextSecond;
     });
 
     const step = findPracticeStepCrossed(
-      previousPracticeSecondRef.current,
-      nextSecond,
-      practiceSteps.data?.practiceSteps ?? [],
+      previousPracticeTimeMsRef.current,
+      nextTimeMs,
+      actionablePracticeSteps,
       triggeredPracticeIdsRef.current,
     );
-    previousPracticeSecondRef.current = nextSecond;
+    previousPracticeTimeMsRef.current = step
+      ? (step.timestampMs ?? step.timestampSeconds * 1000)
+      : nextTimeMs;
 
     if (shouldPauseForPracticeStep(learningMode, step)) {
-      triggeredPracticeIdsRef.current.add(step!.id);
-      setActivePracticeStep(step);
-      setCompletedPracticeStepId(null);
-      setSkippedPracticeStepId(null);
-      setPracticeCheckError(null);
-      setSecondaryPanel(null);
-      setPracticePauseSignal((value) => value + 1);
-      setMobileMode('code');
+      activatePracticeStep(step!);
     }
-  }, [learningMode, practiceSteps.data?.practiceSteps]);
+  }, [actionablePracticeSteps, activatePracticeStep, learningMode]);
 
   if (video.isLoading) {
     return (
@@ -606,7 +722,6 @@ function VideoLessonView({
   const activePracticeIndex = activePracticeStep
     ? (practiceSteps.data?.practiceSteps.findIndex((step) => step.id === activePracticeStep.id) ?? -1)
     : -1;
-  const activePracticeStepCompleted = Boolean(activePracticeStep && completedPracticeStepId === activePracticeStep.id);
   const splitColumns = codeAlongSplitColumns(layoutMode, splitRatio);
 
   return (
@@ -617,7 +732,7 @@ function VideoLessonView({
             <button
               key={mode}
               type="button"
-              onClick={() => setLearningMode(mode)}
+              onClick={() => handleLearningModeChange(mode)}
               className={`rounded px-3 py-1.5 font-semibold transition-colors ${learningMode === mode ? 'bg-card text-foreground shadow-xs' : 'text-muted-foreground'}`}
             >
               {mode === 'FOLLOW' ? 'Follow' : 'Practice'}
@@ -727,7 +842,6 @@ function VideoLessonView({
                   onSeek={(seconds) => {
                     setRequestedSeekSecond(seconds);
                     setCurrentSecond(seconds);
-                    previousPracticeSecondRef.current = seconds;
                     setTimeout(() => setRequestedSeekSecond(null), 100);
                   }}
                 />
@@ -737,11 +851,10 @@ function VideoLessonView({
                 <InstructorTimeline
                   currentSecond={currentSecond}
                   snapshots={snapshots}
-                  activeSnapshotId={selectedSnapshot?.id}
+                  activeSnapshotId={referenceSnapshotId}
                   onSelectSnapshot={(snap) => {
                     setRequestedSeekSecond(snap.timestampSeconds);
                     setCurrentSecond(snap.timestampSeconds);
-                    previousPracticeSecondRef.current = snap.timestampSeconds;
                     setTimeout(() => setRequestedSeekSecond(null), 100);
                   }}
                 />
@@ -753,10 +866,15 @@ function VideoLessonView({
                     <span className="font-semibold text-foreground">{t('learning.instructorCode')}</span>
                     {snapshotDetail.data ? (
                       <Badge tone="info" className="text-[10px]">
-                        {formatTime(snapshotDetail.data.timestampSeconds)}
+                        {activePracticeStep ? 'Practice Reference' : formatTime(snapshotDetail.data.timestampSeconds)}
                       </Badge>
                     ) : null}
                   </div>
+                  {activePracticeStep && snapshotDetail.data ? (
+                    <p className="rounded-md bg-muted px-2 py-1 text-[11px] text-muted-foreground">
+                      Reference snapshot {formatTime(snapshotDetail.data.timestampSeconds)} for practice pause {formatTime(activePracticeStep.timestampSeconds)}
+                    </p>
+                  ) : null}
                   {snapshotDetail.data ? (
                     snapshotDetail.data.files.map((file) => (
                       <div key={file.path} className="overflow-hidden rounded-md border border-border">
@@ -780,10 +898,10 @@ function VideoLessonView({
 
       <div
         ref={splitContainerRef}
-        className="flex min-h-0 flex-col gap-3 xl:grid xl:h-[calc(100vh-220px)] xl:min-h-[620px] xl:gap-0"
+        className={VIDEO_CODE_ALONG_GRID_CLASS_NAME}
         style={isCodeAlongRuntime ? { gridTemplateColumns: splitColumns } : undefined}
       >
-        <section className="min-w-0 overflow-hidden border border-border bg-black xl:flex xl:h-full xl:flex-col xl:rounded-l-xl">
+        <section className={VIDEO_CODE_ALONG_VIDEO_PANE_CLASS_NAME}>
           <div className="relative">
             <VideoPlayer
               playbackUrl={video.data.playbackUrl}
@@ -797,7 +915,19 @@ function VideoLessonView({
               pauseSignal={practicePauseSignal}
               resumeSignal={practiceResumeSignal}
               playbackBlocked={Boolean(activePracticeStep && !activePracticeStepCompleted)}
+              onSeekRequest={handlePracticeSeekRequest}
             />
+            <button
+              type="button"
+              className={`absolute left-3 top-3 z-10 inline-flex h-8 items-center rounded-md border border-white/15 bg-black/70 px-2.5 text-[11px] font-semibold shadow-sm backdrop-blur transition-colors hover:bg-black/85 focus:outline-none focus:ring-2 focus:ring-white/70 ${
+                subtitlesEnabled ? 'text-white' : 'text-white/65'
+              }`}
+              onClick={() => setSubtitlesEnabled((value) => !value)}
+              aria-label={t('learning.subtitles')}
+              aria-pressed={subtitlesEnabled}
+            >
+              CC
+            </button>
             {activePracticeStep ? (
               <div className="absolute inset-0 flex items-center justify-center bg-black/45 p-4 backdrop-blur-[1px]">
                 <div className="w-full max-w-sm rounded-xl border border-white/15 bg-black/70 p-4 text-white shadow-xl">
@@ -815,11 +945,6 @@ function VideoLessonView({
                         : 'Step completed'
                       : activePracticeStep.behavior}
                   </div>
-                  {practiceCheckError && !activePracticeStepCompleted ? (
-                    <p className="mt-3 rounded-md bg-red-500/15 px-2 py-1.5 text-xs text-red-100">
-                      Not completed yet. {practiceCheckError}
-                    </p>
-                  ) : null}
                   <div className="mt-4 flex flex-wrap gap-2">
                     <Button
                       size="sm"
@@ -848,15 +973,15 @@ function VideoLessonView({
                       >
                         Continue Video
                       </Button>
-                    ) : (
+                    ) : workspaceCapabilities.allowCheck ? (
                       <Button
                         size="sm"
                         isLoading={completePracticeStep.isPending}
-                        onClick={() => completePracticeStep.mutate(activePracticeStep)}
+                        onClick={() => void handlePracticeCheck(activePracticeStep)}
                       >
                         {activePracticeStep.verificationMode === 'TESTS' ? 'Submit' : 'Check'}
                       </Button>
-                    )}
+                    ) : null}
                     {activePracticeStep.behavior === 'GUIDED' && !activePracticeStep.required && !activePracticeStepCompleted ? (
                       <Button
                         size="sm"
@@ -871,20 +996,6 @@ function VideoLessonView({
                 </div>
               </div>
             ) : null}
-          </div>
-          <div className="flex items-center justify-between border-t border-border bg-card p-3 text-xs text-muted-foreground">
-            <span>{t('learning.watched', { value: video.data.progress.watchedPercent })}</span>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                className={`font-semibold ${subtitlesEnabled ? 'text-primary' : 'text-muted-foreground'}`}
-                onClick={() => setSubtitlesEnabled((value) => !value)}
-                aria-label={t('learning.subtitles')}
-              >
-                CC
-              </button>
-              <span className="font-mono">{formatTime(currentSecond)} / {formatTime(video.data.durationSeconds)}</span>
-            </div>
           </div>
           {activeCheckpoint ? (
             <div className="border-t border-border bg-card p-3">
@@ -913,7 +1024,7 @@ function VideoLessonView({
         ) : null}
 
         {isCodeAlongRuntime ? (
-          <section className="min-w-0 overflow-y-auto border border-border bg-background p-3 xl:h-full xl:rounded-r-xl">
+          <section className={VIDEO_CODE_ALONG_CODE_PANE_CLASS_NAME}>
             <div className="mb-2 flex items-center justify-between text-xs">
               <span className="font-semibold text-foreground">{t('learning.myCode')}</span>
               {workspaceId ? <span className="text-muted-foreground">Editable workspace</span> : null}
@@ -953,16 +1064,16 @@ function VideoLessonView({
                       >
                         Continue Video
                       </Button>
-                    ) : (
+                    ) : workspaceCapabilities.allowCheck ? (
                       <Button
                         size="sm"
                         isLoading={completePracticeStep.isPending}
-                        onClick={() => completePracticeStep.mutate(activePracticeStep)}
+                        onClick={() => void handlePracticeCheck(activePracticeStep)}
                         leftIcon={<ClipboardCheck className="h-3.5 w-3.5" />}
                       >
                         {activePracticeStep.verificationMode === 'TESTS' ? 'Submit' : 'Check'}
                       </Button>
-                    )}
+                    ) : null}
                     {activePracticeStep.behavior === 'GUIDED' && !activePracticeStep.required && !activePracticeStepCompleted ? (
                       <Button
                         size="sm"
@@ -981,11 +1092,16 @@ function VideoLessonView({
             {workspaceId ? (
               <StudentWorkspace
                 workspaceId={workspaceId}
-                snapshotId={selectedSnapshot?.id}
+                snapshotId={referenceSnapshotId}
                 referenceSnapshot={snapshotDetail.data}
                 mobileMode={mobileMode === 'transcript' ? 'video' : mobileMode}
                 editorHeight="min(52vh, 520px)"
                 compareSignal={compareSignal}
+                onRegisterSave={(save) => {
+                  savePracticeWorkspaceRef.current = save;
+                }}
+                capabilities={workspaceCapabilities}
+                workspaceType={codeAlong.data?.workspaceType ?? 'SINGLE_FILE'}
               />
             ) : workspaceError ? (
               <Card className="space-y-3 border-dashed p-8 text-center">

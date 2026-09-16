@@ -125,7 +125,7 @@ function EnrolledCourseCard({
             <StatusBadge value={item.status} />
           </div>
 
-          <Link href={`/courses/${item.course.slug}/learn`}>
+          <Link href={`/courses/${item.course.slug}`}>
             <h3 className="mt-2 text-base font-semibold text-foreground hover:text-primary transition-colors line-clamp-1">
               {item.course.title}
             </h3>

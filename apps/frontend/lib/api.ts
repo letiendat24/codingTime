@@ -264,19 +264,34 @@ export interface CodeAlongMetadata {
   readonly enabled: boolean;
   readonly language: string;
   readonly entryFile: string | null;
+  readonly workspaceType: 'SINGLE_FILE' | 'MULTI_FILE';
+  readonly capabilities: WorkspaceCapabilities;
   readonly workspaceId: string | null;
   readonly snapshots: readonly CodeSnapshotMetadata[];
 }
 
-export type VideoPracticeVerificationMode = 'NONE' | 'CODE_COMPARE' | 'TESTS';
+export interface WorkspaceCapabilities {
+  readonly allowEditFiles: boolean;
+  readonly allowCreateFiles: boolean;
+  readonly allowCreateFolders: boolean;
+  readonly allowRenameFiles: boolean;
+  readonly allowDeleteFiles: boolean;
+  readonly allowRun: boolean;
+  readonly allowCheck: boolean;
+  readonly allowJudge: boolean;
+}
+
+export type VideoPracticeVerificationMode = 'NONE' | 'CODE_COMPARE' | 'FILE_COMPARE' | 'STRUCTURAL' | 'WORKSPACE_STRUCTURE' | 'TESTS';
 export type VideoPracticeBehavior = 'GUIDED' | 'REQUIRED';
 export type PracticeProgressStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED' | 'SKIPPED';
+export type PracticeVerificationStatus = 'PASSED' | 'FAILED' | 'UNAVAILABLE';
 
 export interface VideoPracticeStep {
   readonly id: string;
   readonly lessonId: string;
   readonly videoAssetId: string | null;
   readonly timestampSeconds: number;
+  readonly timestampMs?: number;
   readonly title: string;
   readonly instruction: string | null;
   readonly required: boolean;
@@ -286,8 +301,23 @@ export interface VideoPracticeStep {
   readonly targetFilePath: string | null;
   readonly targetStartLine: number | null;
   readonly targetEndLine: number | null;
+  readonly verificationRules: unknown;
   readonly status: PracticeProgressStatus;
   readonly completed: boolean;
+}
+
+export interface PracticeStepCompletion {
+  readonly id: string;
+  readonly status: PracticeProgressStatus;
+  readonly completedAt: string | null;
+  readonly passed: boolean;
+  readonly message: string;
+  readonly lessonCompleted: boolean;
+  readonly verification: {
+    readonly status: PracticeVerificationStatus;
+    readonly verificationMode: VideoPracticeVerificationMode;
+    readonly details: readonly string[];
+  };
 }
 
 export interface VideoCheckpoint {

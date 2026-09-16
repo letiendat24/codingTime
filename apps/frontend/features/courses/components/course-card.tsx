@@ -71,7 +71,7 @@ export function CourseCard({
   const { t: _t } = useI18n();
 
   const isCompleted = isEnrolled && progressPercent === 100;
-  const targetLink = isEnrolled ? `/courses/${course.slug}/learn` : `/courses/${course.slug}`;
+  const targetLink = `/courses/${course.slug}`;
 
   return (
     <motion.div

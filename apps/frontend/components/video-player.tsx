@@ -36,6 +36,10 @@ interface VideoPlayerProps {
   readonly pauseSignal?: number | undefined;
   readonly resumeSignal?: number | undefined;
   readonly playbackBlocked?: boolean | undefined;
+  readonly onSeekRequest?: ((input: {
+    readonly currentSeconds: number;
+    readonly requestedSeconds: number;
+  }) => number | null | undefined) | undefined;
 }
 
 export function VideoPlayer({
@@ -51,6 +55,7 @@ export function VideoPlayer({
   pauseSignal,
   resumeSignal,
   playbackBlocked = false,
+  onSeekRequest,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const previousTimeRef = useRef(initialPositionSeconds);
@@ -73,6 +78,7 @@ export function VideoPlayer({
   const onTimeChangeRef = useRef(onTimeChange);
   const progressSaveIntervalRef = useRef(progressSaveIntervalSeconds);
   const playbackBlockedRef = useRef(playbackBlocked);
+  const onSeekRequestRef = useRef(onSeekRequest);
 
   useEffect(() => {
     checkpointsRef.current = checkpoints;
@@ -102,6 +108,10 @@ export function VideoPlayer({
   }, [playbackBlocked]);
 
   useEffect(() => {
+    onSeekRequestRef.current = onSeekRequest;
+  }, [onSeekRequest]);
+
+  useEffect(() => {
     previousTimeRef.current = initialPositionSeconds;
     lastSavedPositionRef.current = initialPositionSeconds;
     lastSavedAtRef.current = 0;
@@ -121,8 +131,12 @@ export function VideoPlayer({
     }
 
     const applySeek = () => {
+      const currentSeconds = previousTimeRef.current;
+      const requestedSeconds = Math.max(0, seekToSeconds);
+      const guardedSeconds = onSeekRequestRef.current?.({ currentSeconds, requestedSeconds });
+      const effectiveSeconds = Math.max(0, guardedSeconds ?? requestedSeconds);
       suppressSeekCheckRef.current = true;
-      video.currentTime = Math.max(0, seekToSeconds);
+      video.currentTime = effectiveSeconds;
       previousTimeRef.current = video.currentTime;
       onTimeChangeRef.current?.(video.currentTime);
     };
@@ -350,6 +364,20 @@ export function VideoPlayer({
     function handleSeeking() {
       if (suppressSeekCheckRef.current) {
         suppressSeekCheckRef.current = false;
+        return;
+      }
+
+      const requestedSeconds = video.currentTime;
+      const guardedSeconds = onSeekRequestRef.current?.({
+        currentSeconds: previousTimeRef.current,
+        requestedSeconds,
+      });
+
+      if (guardedSeconds !== null && guardedSeconds !== undefined && Math.abs(guardedSeconds - requestedSeconds) > 0.01) {
+        suppressSeekCheckRef.current = true;
+        video.currentTime = Math.max(0, guardedSeconds);
+        previousTimeRef.current = video.currentTime;
+        onTimeChangeRef.current?.(video.currentTime);
         return;
       }
 

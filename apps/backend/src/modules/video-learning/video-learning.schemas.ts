@@ -1,4 +1,4 @@
-import { CheckpointProgressStatus, VideoCheckpointType, VideoPracticeBehavior, VideoPracticeVerificationMode } from '@prisma/client';
+import { CheckpointProgressStatus, VideoCheckpointType, VideoPracticeBehavior, VideoPracticeVerificationMode, VideoWorkspaceType } from '@prisma/client';
 import { z } from 'zod';
 
 export const videoAssetIdParamSchema = z.object({
@@ -38,6 +38,7 @@ export const practiceStepConfigSchema = z.object({
   practiceTargetFilePath: z.string().trim().min(1).max(240).optional().nullable(),
   practiceTargetStartLine: z.coerce.number().int().positive().optional().nullable(),
   practiceTargetEndLine: z.coerce.number().int().positive().optional().nullable(),
+  practiceVerificationRules: z.unknown().optional().nullable(),
 });
 
 export const practiceStepCompleteSchema = z.object({
@@ -62,6 +63,15 @@ export const codeAlongConfigSchema = z.object({
   enabled: z.coerce.boolean(),
   language: z.string().trim().min(1).max(40),
   entryFile: z.string().trim().min(1).max(240).optional().nullable(),
+  workspaceType: z.nativeEnum(VideoWorkspaceType).default(VideoWorkspaceType.SINGLE_FILE),
+  allowEditFiles: z.coerce.boolean().default(true),
+  allowCreateFiles: z.coerce.boolean().default(false),
+  allowCreateFolders: z.coerce.boolean().default(false),
+  allowRenameFiles: z.coerce.boolean().default(false),
+  allowDeleteFiles: z.coerce.boolean().default(false),
+  allowRun: z.coerce.boolean().default(true),
+  allowCheck: z.coerce.boolean().default(true),
+  allowJudge: z.coerce.boolean().default(true),
 });
 
 export type VideoProgressInput = z.infer<typeof videoProgressSchema>;
