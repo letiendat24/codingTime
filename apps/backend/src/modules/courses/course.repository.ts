@@ -39,6 +39,21 @@ const courseInclude = {
               },
             },
           },
+          codeAlongConfig: true,
+          videoAsset: {
+            include: {
+              checkpoints: {
+                include: {
+                  codingConfig: {
+                    include: {
+                      testCases: true,
+                    },
+                  },
+                },
+              },
+              codeSnapshots: true,
+            },
+          },
         },
         orderBy: {
           position: 'asc',

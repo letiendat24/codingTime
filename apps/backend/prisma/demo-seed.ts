@@ -541,6 +541,57 @@ const practiceProblemSpecs = [
   ['Schema Validator', PracticeDifficulty.HARD, ['TypeScript', 'Object']],
 ] as const;
 
+function practiceFixture(title: string) {
+  if (title === 'Two Sum') {
+    return {
+      description: 'Given an array of integers nums and an integer target, return the indices of the two numbers that add up to target. Print the answer as a JSON array.',
+      inputFormat: 'solution(input) receives an object: { "nums": [number, ...], "target": number }.',
+      outputFormat: 'Return a JSON-serializable array containing the two indices, for example [0,1].',
+      constraints: '2 <= nums.length <= 10000. Exactly one valid answer exists.',
+      starter: 'function solution(input) {\n  // input: { nums: number[], target: number }\n  return [];\n}\n\nmodule.exports = { solution };\n',
+      reference: 'function solution(input) {\n  const seen = new Map();\n  for (let i = 0; i < input.nums.length; i += 1) {\n    const need = input.target - input.nums[i];\n    if (seen.has(need)) {\n      return [seen.get(need), i];\n    }\n    seen.set(input.nums[i], i);\n  }\n  return [];\n}\n\nmodule.exports = { solution };\n',
+      tests: [
+        ['Sample 1', TestCaseVisibility.PUBLIC, '{"nums":[2,7,11,15],"target":9}', '[0,1]'],
+        ['Sample 2', TestCaseVisibility.PUBLIC, '{"nums":[3,2,4],"target":6}', '[1,2]'],
+        ['Hidden duplicate values', TestCaseVisibility.HIDDEN, '{"nums":[3,3],"target":6}', '[0,1]'],
+        ['Hidden negatives', TestCaseVisibility.HIDDEN, '{"nums":[-1,-2,-3,-4,-5],"target":-8}', '[2,4]'],
+      ] as const,
+    };
+  }
+
+  if (title === 'Valid Parentheses') {
+    return {
+      description: 'Given a string containing only bracket characters, print true when every opened bracket is closed in the correct order.',
+      inputFormat: 'solution(input) receives one string such as "()[]{}".',
+      outputFormat: 'Return true when the string is valid, otherwise return false.',
+      constraints: '0 <= s.length <= 10000. Characters are limited to (), [], and {}.',
+      starter: 'function solution(input) {\n  // input is a string containing bracket characters.\n  return false;\n}\n\nmodule.exports = { solution };\n',
+      reference: 'function solution(input) {\n  const closeToOpen = new Map([[")", "("], ["]", "["], ["}", "{"]]);\n  const stack = [];\n  for (const ch of input) {\n    if (closeToOpen.has(ch)) {\n      if (stack.pop() !== closeToOpen.get(ch)) {\n        return false;\n      }\n    } else {\n      stack.push(ch);\n    }\n  }\n  return stack.length === 0;\n}\n\nmodule.exports = { solution };\n',
+      tests: [
+        ['Sample valid', TestCaseVisibility.PUBLIC, '"()[]{}"', 'true'],
+        ['Sample invalid', TestCaseVisibility.PUBLIC, '"(]"', 'false'],
+        ['Hidden nested', TestCaseVisibility.HIDDEN, '"{[()()]}"', 'true'],
+        ['Hidden wrong order', TestCaseVisibility.HIDDEN, '"([)]"', 'false'],
+      ] as const,
+    };
+  }
+
+  return {
+    description: article(title, ['problem statement', 'solution(input) contract', 'edge cases']),
+    inputFormat: 'solution(input) receives a JSON value for this practice prompt.',
+    outputFormat: 'Return the expected JSON-serializable value.',
+    constraints: 'Input size is small enough for the configured JavaScript sandbox limits.',
+    starter: 'function solution(input) {\n  // Write your solution here.\n  return input;\n}\n\nmodule.exports = { solution };\n',
+    reference: 'function solution(input) {\n  return input;\n}\n\nmodule.exports = { solution };\n',
+    tests: [
+      ['Sample 1', TestCaseVisibility.PUBLIC, '"alpha"', '"alpha"'],
+      ['Sample 2', TestCaseVisibility.PUBLIC, '"beta"', '"beta"'],
+      ['Hidden edge 1', TestCaseVisibility.HIDDEN, '"gamma"', '"gamma"'],
+      ['Hidden edge 2', TestCaseVisibility.HIDDEN, '"delta"', '"delta"'],
+    ] as const,
+  };
+}
+
 async function ensureRole(name: RoleName) {
   return prisma.role.upsert({
     where: { name },
@@ -664,6 +715,7 @@ async function seedSnapshots(lessonId: string, videoAssetId: string, instructorI
   ] as const;
   const snapshots: CodeSnapshot[] = [];
 
+  await prisma.videoCheckpoint.deleteMany({ where: { lessonId, videoAssetId } });
   await prisma.codeSnapshot.deleteMany({ where: { lessonId } });
 
   for (const [index, [timestampSeconds, title]] of timeline.entries()) {
@@ -697,6 +749,7 @@ async function seedPracticeCheckpoint(lessonId: string, videoAssetId: string, sn
       pauseVideo: false,
       position: 43,
       practiceEnabled: true,
+      practiceConfigMode: 'AUTO',
       practiceVerificationMode: VideoPracticeVerificationMode.CODE_COMPARE,
       practiceBehavior: VideoPracticeBehavior.REQUIRED,
       practiceSnapshotId: snapshotId,
@@ -718,6 +771,7 @@ async function seedWorkspaceStructurePracticeCheckpoint(lessonId: string, videoA
       pauseVideo: false,
       position: 95,
       practiceEnabled: true,
+      practiceConfigMode: 'AUTO',
       practiceVerificationMode: VideoPracticeVerificationMode.WORKSPACE_STRUCTURE,
       practiceBehavior: VideoPracticeBehavior.REQUIRED,
       practiceTargetFilePath: 'src/components/UserCard.tsx',
@@ -1058,6 +1112,8 @@ async function seedCourse(spec: CourseSpec, instructorId: string) {
               allowRun: !isProjectWorkspaceDemo,
               allowCheck: true,
               allowJudge: !isProjectWorkspaceDemo,
+              defaultPracticeBehavior: VideoPracticeBehavior.REQUIRED,
+              defaultVerificationStrategy: 'AUTO',
             },
             create: {
               lessonId: lesson.id,
@@ -1072,6 +1128,8 @@ async function seedCourse(spec: CourseSpec, instructorId: string) {
               allowRun: !isProjectWorkspaceDemo,
               allowCheck: true,
               allowJudge: !isProjectWorkspaceDemo,
+              defaultPracticeBehavior: VideoPracticeBehavior.REQUIRED,
+              defaultVerificationStrategy: 'AUTO',
             },
           });
           const snapshots = await seedSnapshots(lesson.id, video.id, instructorId);
@@ -1122,17 +1180,29 @@ async function seedPracticeProblems(instructorId: string, students: readonly { r
   for (const [index, [title, difficulty, tags]] of practiceProblemSpecs.entries()) {
     const slug = slugify(title);
     const status = index === 18 ? PracticeProblemStatus.DRAFT : index === 19 ? PracticeProblemStatus.ARCHIVED : PracticeProblemStatus.PUBLISHED;
+    const fixture = practiceFixture(title);
     const problem = await prisma.practiceProblem.upsert({
       where: { slug },
       update: {
         createdByUserId: instructorId,
         title,
-        description: article(title, ['problem statement', 'input/output contract', 'edge cases']),
+        description: fixture.description,
+        inputFormat: fixture.inputFormat,
+        outputFormat: fixture.outputFormat,
+        constraints: fixture.constraints,
+        examplesJson: { examples: fixture.tests.filter((test) => test[1] === TestCaseVisibility.PUBLIC).map((test) => ({ input: test[2], output: test[3] })) } as Prisma.InputJsonValue,
+        explanation: 'Implement solution(input) and return the answer. CodeSync owns sandbox execution I/O.',
         difficulty,
         status,
         language: 'javascript',
         entryFile: 'index.js',
-        starterFilesJson: { files: [{ path: 'index.js', content: `function solution(input) {\n  return input;\n}\n\nmodule.exports = { solution };\n` }] } as Prisma.InputJsonValue,
+        starterFilesJson: { files: [{ path: 'index.js', content: fixture.starter }] } as Prisma.InputJsonValue,
+        referenceFilesJson: { files: [{ path: 'index.js', content: fixture.reference }] } as Prisma.InputJsonValue,
+        executionContract: 'FUNCTION',
+        comparisonPolicy: 'NORMALIZED_TEXT',
+        validationFingerprint: null,
+        validatedAt: null,
+        validationSummaryJson: Prisma.DbNull,
         passScore: new Prisma.Decimal(70),
         scoringMode: ScoringMode.WEIGHTED,
         publishedAt: status === PracticeProblemStatus.PUBLISHED ? daysAgo(index % 8) : null,
@@ -1142,12 +1212,20 @@ async function seedPracticeProblems(instructorId: string, students: readonly { r
         createdByUserId: instructorId,
         title,
         slug,
-        description: article(title, ['problem statement', 'input/output contract', 'edge cases']),
+        description: fixture.description,
+        inputFormat: fixture.inputFormat,
+        outputFormat: fixture.outputFormat,
+        constraints: fixture.constraints,
+        examplesJson: { examples: fixture.tests.filter((test) => test[1] === TestCaseVisibility.PUBLIC).map((test) => ({ input: test[2], output: test[3] })) } as Prisma.InputJsonValue,
+        explanation: 'Implement solution(input) and return the answer. CodeSync owns sandbox execution I/O.',
         difficulty,
         status,
         language: 'javascript',
         entryFile: 'index.js',
-        starterFilesJson: { files: [{ path: 'index.js', content: `function solution(input) {\n  return input;\n}\n\nmodule.exports = { solution };\n` }] } as Prisma.InputJsonValue,
+        starterFilesJson: { files: [{ path: 'index.js', content: fixture.starter }] } as Prisma.InputJsonValue,
+        referenceFilesJson: { files: [{ path: 'index.js', content: fixture.reference }] } as Prisma.InputJsonValue,
+        executionContract: 'FUNCTION',
+        comparisonPolicy: 'NORMALIZED_TEXT',
         passScore: new Prisma.Decimal(70),
         scoringMode: ScoringMode.WEIGHTED,
         publishedAt: status === PracticeProblemStatus.PUBLISHED ? daysAgo(index % 8) : null,
@@ -1166,14 +1244,14 @@ async function seedPracticeProblems(instructorId: string, students: readonly { r
     }
 
     await prisma.practiceProblemTestCase.deleteMany({ where: { practiceProblemId: problem.id } });
-    for (let testIndex = 0; testIndex < 4; testIndex += 1) {
+    for (const [testIndex, test] of fixture.tests.entries()) {
       await prisma.practiceProblemTestCase.create({
         data: {
           practiceProblemId: problem.id,
-          name: testIndex < 2 ? `Sample ${testIndex + 1}` : `Hidden edge ${testIndex - 1}`,
-          visibility: testIndex < 2 ? TestCaseVisibility.PUBLIC : TestCaseVisibility.HIDDEN,
-          input: JSON.stringify({ case: testIndex + 1, title }),
-          expectedOutput: JSON.stringify({ ok: true, case: testIndex + 1 }),
+          name: test[0],
+          visibility: test[1],
+          input: test[2],
+          expectedOutput: test[3],
           weight: new Prisma.Decimal(25),
           position: testIndex + 1,
         },

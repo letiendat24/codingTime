@@ -17,4 +17,13 @@ describe('judge output comparator', () => {
   it('does not normalize meaningful internal whitespace', () => {
     expect(outputsMatch('hello  world', 'hello world')).toBe(false);
   });
+
+  it('compares structured JSON values for function-contract returns', () => {
+    expect(outputsMatch('[0,1]', '[0, 1]')).toBe(true);
+    expect(outputsMatch('{"b":2,"a":1}', '{"a":1,"b":2}')).toBe(true);
+  });
+
+  it('keeps array order significant for structured JSON values', () => {
+    expect(outputsMatch('[1,0]', '[0,1]')).toBe(false);
+  });
 });

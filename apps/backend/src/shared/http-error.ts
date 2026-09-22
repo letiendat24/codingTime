@@ -4,6 +4,7 @@ export class HttpError extends Error {
     public readonly code: string,
     message: string,
     public readonly details?: readonly string[],
+    public readonly issues?: readonly unknown[],
   ) {
     super(message);
     this.name = 'HttpError';

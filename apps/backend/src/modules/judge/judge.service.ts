@@ -516,6 +516,107 @@ export class JudgeService {
     return { id: submission.id, status: submission.status };
   }
 
+  async submitVideoPracticeStep(
+    userId: string,
+    checkpointId: string,
+    workspaceId: string,
+    correlationId: string,
+  ): Promise<JudgeSubmissionQueuedResponse> {
+    const now = new Date();
+    const workspace = await this.repository.findVideoPracticeWorkspaceForSubmission(userId, checkpointId, workspaceId);
+
+    if (!workspace) {
+      throw judgeWorkspaceNotFound();
+    }
+
+    const checkpoint = workspace.lesson?.videoAsset?.checkpoints[0];
+    const config = checkpoint?.codingConfig;
+
+    if (!checkpoint || !config || !workspace.lessonId || !workspace.lesson?.module?.course?.id) {
+      throw judgeSubmissionNotAllowed('Practice step has no judgeable test configuration');
+    }
+
+    const language = validateLanguage(workspace.language);
+
+    if (language !== config.language.toLowerCase()) {
+      throw judgeSubmissionNotAllowed('Workspace language does not match practice step test configuration');
+    }
+
+    const files = workspace.files.map((file) => ({ path: file.path, content: file.content }));
+    validateWorkspaceFiles(files, config.entryFile, this.env);
+
+    if (config.testCases.length === 0 || !config.testCases.some((test) => Number(test.weight) > 0)) {
+      throw judgeSubmissionNotAllowed('Practice step has no judgeable test cases');
+    }
+
+    validateResourceLimits({ timeLimitMs: config.timeLimitMs, memoryLimitMb: config.memoryLimitMb }, this.env);
+
+    const active = await this.repository.countActiveSubmissions(userId);
+
+    if (active >= this.env.JUDGE_MAX_ACTIVE_PER_USER) {
+      throw judgeActiveLimitExceeded();
+    }
+
+    const submission = await this.repository.createSubmission({
+      userId,
+      workspaceId: workspace.id,
+      checkpointId: checkpoint.id,
+      codingCheckpointConfigId: config.id,
+      practiceProblemId: null,
+      language,
+      entryFile: config.entryFile,
+      filesSnapshotJson: { files } as Prisma.InputJsonValue,
+      status: JudgeSubmissionStatus.QUEUED,
+      jobId: randomUUID(),
+      idempotencyKey: randomUUID(),
+      correlationId,
+      submittedAt: now,
+    });
+
+    await this.repository.createSubmittedActivity({
+      userId,
+      checkpointId: checkpoint.id,
+      submissionId: submission.id,
+      lessonId: workspace.lessonId,
+      courseId: workspace.lesson.module.course.id,
+      createdAt: now,
+    });
+
+    const message: AsyncMessage<CodeJudgeRequestedPayload> = {
+      jobId: submission.jobId,
+      idempotencyKey: submission.idempotencyKey,
+      correlationId,
+      requestedByUserId: userId,
+      createdAt: now.toISOString(),
+      payload: {
+        submissionId: submission.id,
+        checkpointId: checkpoint.id,
+        practiceProblemId: null,
+        language,
+        entryFile: config.entryFile,
+        timeLimitMs: config.timeLimitMs,
+        memoryLimitMb: config.memoryLimitMb,
+        passScore: Number(config.passScore),
+        scoringMode: config.scoringMode,
+        files,
+        testCases: config.testCases.map((test) => ({
+          id: test.id,
+          name: test.name,
+          visibility: test.visibility,
+          input: test.input,
+          expectedOutput: test.expectedOutput,
+          weight: Number(test.weight),
+          position: test.position,
+        })),
+      },
+    };
+
+    this.publisher.publishJudgeRequested(message);
+    this.logger.info({ userId, checkpointId, workspaceId: workspace.id, submissionId: submission.id, correlationId }, 'video practice judge submission queued');
+
+    return { id: submission.id, status: submission.status };
+  }
+
   async submitPractice(userId: string, problemId: string, correlationId: string): Promise<JudgeSubmissionQueuedResponse> {
     const now = new Date();
     const workspace = await this.repository.findPracticeWorkspaceForSubmission(userId, problemId);
@@ -582,6 +683,7 @@ export class JudgeService {
         passScore: Number(problem.passScore),
         scoringMode: problem.scoringMode,
         files,
+        executionMode: problem.executionContract === 'FUNCTION' ? 'FUNCTION' : 'DIRECT',
         testCases: problem.testCases.map((test) => ({
           id: test.id,
           name: test.name,

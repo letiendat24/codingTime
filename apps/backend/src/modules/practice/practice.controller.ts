@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import {
   createPracticeProblemSchema,
   instructorPracticeListQuerySchema,
+  importPracticeTestCasesSchema,
   practiceProblemIdParamsSchema,
   practiceProblemSlugParamsSchema,
   practiceSubmissionListQuerySchema,
@@ -40,6 +41,11 @@ export class PracticeController {
     response.status(200).json(await this.service.publishProblem(request.auth!.userId, params.problemId));
   };
 
+  validateProblem = async (request: Request, response: Response) => {
+    const params = practiceProblemIdParamsSchema.parse(request.params);
+    response.status(200).json(await this.service.validateProblem(request.auth!.userId, params.problemId));
+  };
+
   archiveProblem = async (request: Request, response: Response) => {
     const params = practiceProblemIdParamsSchema.parse(request.params);
     response.status(200).json(await this.service.archiveProblem(request.auth!.userId, params.problemId));
@@ -59,6 +65,21 @@ export class PracticeController {
     const params = practiceTestCaseParamsSchema.parse(request.params);
     await this.service.deleteTestCase(request.auth!.userId, params.testCaseId);
     response.status(204).send();
+  };
+
+  deleteProblem = async (request: Request, response: Response) => {
+    const params = practiceProblemIdParamsSchema.parse(request.params);
+    await this.service.deleteProblem(request.auth!.userId, params.problemId);
+    response.status(204).send();
+  };
+
+  importTestCases = async (request: Request, response: Response) => {
+    const params = practiceProblemIdParamsSchema.parse(request.params);
+    response.status(201).json(await this.service.importTestCases(
+      request.auth!.userId,
+      params.problemId,
+      importPracticeTestCasesSchema.parse(request.body),
+    ));
   };
 
   reorderTestCases = async (request: Request, response: Response) => {

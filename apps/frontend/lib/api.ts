@@ -22,17 +22,35 @@ export function clearAccessToken() {
   window.localStorage.removeItem('codesync_access_token');
 }
 
+export interface CoursePublishIssue {
+  readonly type: string;
+  readonly severity: 'ERROR' | 'WARNING' | 'INFO';
+  readonly lessonId?: string;
+  readonly checkpointId?: string;
+  readonly checkpointTitle?: string;
+  readonly message: string;
+  readonly fix: string;
+}
+
 export class ApiError extends Error {
   readonly statusCode: number;
   readonly code?: string | undefined;
   readonly details?: readonly string[] | undefined;
+  readonly issues?: readonly CoursePublishIssue[] | undefined;
 
-  constructor(message: string, statusCode: number, code?: string, details?: readonly string[]) {
+  constructor(
+    message: string,
+    statusCode: number,
+    code?: string,
+    details?: readonly string[],
+    issues?: readonly CoursePublishIssue[],
+  ) {
     super(message);
     this.name = 'ApiError';
     this.statusCode = statusCode;
     this.code = code;
     this.details = details;
+    this.issues = issues;
   }
 }
 
@@ -156,11 +174,12 @@ export async function requestJson<T>(path: string, options: RequestJsonOptions =
             readonly message?: string;
             readonly code?: string;
             readonly details?: readonly string[];
+            readonly issues?: readonly CoursePublishIssue[];
           };
         }
       | undefined;
     const message = body?.error?.message ?? (response.status === 404 ? 'Resource not found' : 'Request failed');
-    throw new ApiError(message, response.status, body?.error?.code, body?.error?.details);
+    throw new ApiError(message, response.status, body?.error?.code, body?.error?.details, body?.error?.issues);
   }
 
   if (response.status === 204) {
@@ -281,7 +300,7 @@ export interface WorkspaceCapabilities {
   readonly allowJudge: boolean;
 }
 
-export type VideoPracticeVerificationMode = 'NONE' | 'CODE_COMPARE' | 'FILE_COMPARE' | 'STRUCTURAL' | 'WORKSPACE_STRUCTURE' | 'TESTS';
+export type VideoPracticeVerificationMode = 'NONE' | 'AI_SEMANTIC' | 'CODE_COMPARE' | 'FILE_COMPARE' | 'STRUCTURAL' | 'WORKSPACE_STRUCTURE' | 'TESTS';
 export type VideoPracticeBehavior = 'GUIDED' | 'REQUIRED';
 export type PracticeProgressStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED' | 'SKIPPED';
 export type PracticeVerificationStatus = 'PASSED' | 'FAILED' | 'UNAVAILABLE';
@@ -317,6 +336,16 @@ export interface PracticeStepCompletion {
     readonly status: PracticeVerificationStatus;
     readonly verificationMode: VideoPracticeVerificationMode;
     readonly details: readonly string[];
+    readonly summary?: string;
+    readonly guidance?: string | null;
+    readonly requirements?: readonly {
+      readonly label: string;
+      readonly status: 'PASS' | 'NEEDS_FIX' | 'UNKNOWN';
+      readonly feedback: string;
+    }[];
+    readonly attemptId?: string | null;
+    readonly cached?: boolean;
+    readonly stale?: boolean;
   };
 }
 
@@ -330,6 +359,7 @@ export interface VideoCheckpoint {
   readonly pauseVideo: boolean;
   readonly completed: boolean;
   readonly practiceEnabled?: boolean;
+  readonly practiceConfigMode?: 'AUTO' | 'MANUAL_OVERRIDE';
   readonly practiceVerificationMode?: VideoPracticeVerificationMode;
   readonly practiceBehavior?: VideoPracticeBehavior;
   readonly practiceSnapshotId?: string | null;
@@ -522,6 +552,35 @@ export interface InstructorQuiz {
   readonly shuffleOptions: boolean;
   readonly showResultImmediately: boolean;
   readonly questions: readonly InstructorQuizQuestion[];
+}
+
+export type QuizImportFormat = 'JSON' | 'XLSX';
+export type QuizImportMode = 'APPEND' | 'REPLACE';
+
+export interface QuizImportPreviewQuestion {
+  readonly type: QuizQuestionType;
+  readonly prompt: string;
+  readonly explanation: string | null;
+  readonly points: number;
+  readonly position: number;
+  readonly options: readonly {
+    readonly text: string;
+    readonly isCorrect: boolean;
+    readonly position: number;
+  }[];
+}
+
+export interface QuizImportPreview {
+  readonly summary: {
+    readonly totalRows: number;
+    readonly validRows: number;
+    readonly invalidRows: number;
+  };
+  readonly errors: readonly {
+    readonly row: number;
+    readonly message: string;
+  }[];
+  readonly questions: readonly QuizImportPreviewQuestion[];
 }
 
 export interface StudentCodingLessonDetails {
@@ -824,9 +883,20 @@ export interface PracticeProblemDetail {
   readonly title: string;
   readonly slug: string;
   readonly description: string;
+  readonly inputFormat: string;
+  readonly outputFormat: string;
+  readonly constraints: string;
+  readonly examples: readonly {
+    readonly input: string;
+    readonly output: string;
+    readonly explanation?: string;
+  }[];
+  readonly explanation: string | null;
   readonly difficulty: 'EASY' | 'MEDIUM' | 'HARD';
   readonly language: string;
   readonly entryFile: string;
+  readonly executionContract: 'FUNCTION';
+  readonly comparisonPolicy: 'NORMALIZED_TEXT';
   readonly timeLimitMs: number;
   readonly memoryLimitMb: number;
   readonly passScore: number;
@@ -845,7 +915,10 @@ export interface PracticeProblemDetail {
 export interface InstructorPracticeProblem extends PracticeProblemDetail {
   readonly status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
   readonly starterFiles: readonly WorkspaceFile[];
+  readonly referenceFiles: readonly WorkspaceFile[];
   readonly scoringMode: 'ALL_OR_NOTHING' | 'WEIGHTED';
+  readonly validatedAt: string | null;
+  readonly validationFingerprint: string | null;
   readonly createdAt: string;
   readonly publishedAt: string | null;
   readonly archivedAt: string | null;

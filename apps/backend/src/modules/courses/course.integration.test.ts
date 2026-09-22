@@ -7,7 +7,7 @@ import { createApp } from '../../app';
 import type { Env } from '../../config';
 import { createLogger } from '../../shared/logger';
 import { TokenService } from '../auth/token.service';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 
 const testEnv: Env = {
   NODE_ENV: 'test',
@@ -462,5 +462,225 @@ describe('course management integration', () => {
       .set('Authorization', `Bearer ${instructor.token}`);
     expect(republished.status).toBe(200);
     expect((republished.body as CourseBody).course.status).toBe(CourseStatus.PUBLISHED);
+  });
+
+  it('validates video practice checkpoints (STRUCTURAL, WORKSPACE_STRUCTURE, NONE, TESTS) before publishing', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const created = await createDraftCourse(instructor, 'video-practice-publish');
+    const courseId = (created.body as CourseBody).course.id;
+    const module = await addModule(instructor, courseId, 'Module with Video');
+
+    const videoLesson = await prisma.lesson.create({
+      data: {
+        moduleId: module.id,
+        title: 'Video Practice Lesson',
+        lessonType: LessonType.VIDEO,
+        position: 1,
+      },
+    });
+
+    const videoAsset = await prisma.videoAsset.create({
+      data: {
+        lesson: { connect: { id: videoLesson.id } },
+        createdBy: { connect: { id: instructor.id } },
+        status: 'READY',
+        durationSeconds: 300,
+        originalFilename: 'lesson.mp4',
+        mimeType: 'video/mp4',
+        sizeBytes: 10_000_000n,
+        sourceObjectKey: 'original/lesson.mp4',
+        masterPlaylistObjectKey: 'hls/master.m3u8',
+      },
+    });
+
+    const snapshot = await prisma.codeSnapshot.create({
+      data: {
+        lessonId: videoLesson.id,
+        videoAssetId: videoAsset.id,
+        timestampSeconds: 50,
+        title: 'Snapshot 1',
+        language: 'javascript',
+        filesJson: {
+          files: [{ path: 'src/index.js', content: 'export function solve() { return 1; }' }],
+        },
+        createdByUserId: instructor.id,
+      },
+    });
+
+    // 1. STRUCTURAL with missing snapshot fails publish
+    const checkpoint = await prisma.videoCheckpoint.create({
+      data: {
+        lessonId: videoLesson.id,
+        videoAssetId: videoAsset.id,
+        timestampSeconds: 50,
+        type: 'INFO',
+        title: 'Structural Checkpoint',
+        description: 'Implement solve',
+        required: true,
+        practiceEnabled: true,
+        practiceConfigMode: 'MANUAL_OVERRIDE',
+        practiceVerificationMode: 'STRUCTURAL',
+        practiceSnapshotId: randomUUID(), // non-existent snapshot
+        practiceTargetFilePath: 'src/index.js',
+        practiceVerificationRulesJson: { rules: [{ type: 'EXPORT_EXISTS', path: 'src/index.js', value: 'solve' }] },
+      },
+    });
+
+    let publishRes = await request(app)
+      .post(`/api/v1/instructor/courses/${courseId}/publish`)
+      .set('Authorization', `Bearer ${instructor.token}`);
+    expect(publishRes.status).toBe(422);
+    expect(publishRes.body.error.details.join(' ')).toContain('references a code snapshot outside this lesson/video');
+
+    // 2. STRUCTURAL with unsafe path fails publish
+    await prisma.videoCheckpoint.update({
+      where: { id: checkpoint.id },
+      data: {
+        practiceSnapshotId: snapshot.id,
+        practiceTargetFilePath: '../unsafe/index.js',
+      },
+    });
+
+    publishRes = await request(app)
+      .post(`/api/v1/instructor/courses/${courseId}/publish`)
+      .set('Authorization', `Bearer ${instructor.token}`);
+    expect(publishRes.status).toBe(422);
+    expect(publishRes.body.error.details.join(' ')).toContain('unsafe target file path');
+
+    // 3. Valid STRUCTURAL publishes cleanly
+    await prisma.videoCheckpoint.update({
+      where: { id: checkpoint.id },
+      data: {
+        practiceTargetFilePath: 'src/index.js',
+      },
+    });
+
+    publishRes = await request(app)
+      .post(`/api/v1/instructor/courses/${courseId}/publish`)
+      .set('Authorization', `Bearer ${instructor.token}`);
+    expect(publishRes.status).toBe(200);
+
+    // Unpublish to continue testing
+    await request(app)
+      .post(`/api/v1/instructor/courses/${courseId}/unpublish`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .expect(200);
+
+    // 4. WORKSPACE_STRUCTURE with empty requirements fails publish
+    await prisma.videoCheckpoint.update({
+      where: { id: checkpoint.id },
+      data: {
+        practiceVerificationMode: 'WORKSPACE_STRUCTURE',
+        practiceTargetFilePath: null,
+        practiceVerificationRulesJson: Prisma.DbNull,
+      },
+    });
+
+    publishRes = await request(app)
+      .post(`/api/v1/instructor/courses/${courseId}/publish`)
+      .set('Authorization', `Bearer ${instructor.token}`);
+    expect(publishRes.status).toBe(422);
+    expect(publishRes.body.error.details.join(' ')).toContain('requires at least one required file or rule');
+
+    // 5. Valid WORKSPACE_STRUCTURE publishes cleanly
+    await prisma.videoCheckpoint.update({
+      where: { id: checkpoint.id },
+      data: {
+        practiceVerificationRulesJson: { requiredPaths: ['src/index.js'] },
+      },
+    });
+
+    publishRes = await request(app)
+      .post(`/api/v1/instructor/courses/${courseId}/publish`)
+      .set('Authorization', `Bearer ${instructor.token}`);
+    expect(publishRes.status).toBe(200);
+
+    // Unpublish to test NONE
+    await request(app)
+      .post(`/api/v1/instructor/courses/${courseId}/unpublish`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .expect(200);
+
+    // 6. Intentional NONE manual completion publishes cleanly
+    await prisma.videoCheckpoint.update({
+      where: { id: checkpoint.id },
+      data: {
+        practiceVerificationMode: 'NONE',
+        practiceTargetFilePath: null,
+        practiceVerificationRulesJson: Prisma.DbNull,
+      },
+    });
+
+    publishRes = await request(app)
+      .post(`/api/v1/instructor/courses/${courseId}/publish`)
+      .set('Authorization', `Bearer ${instructor.token}`);
+    expect(publishRes.status).toBe(200);
+  });
+
+  it('publishes a milestone checkpoint without requiring Student Task text', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const created = await createDraftCourse(instructor, 'video-milestone-no-task');
+    const courseId = (created.body as CourseBody).course.id;
+    const module = await addModule(instructor, courseId, 'Module with Follow Only Video');
+
+    const videoLesson = await prisma.lesson.create({
+      data: {
+        moduleId: module.id,
+        title: 'Follow Only Video Lesson',
+        lessonType: LessonType.VIDEO,
+        position: 1,
+      },
+    });
+
+    const videoAsset = await prisma.videoAsset.create({
+      data: {
+        lesson: { connect: { id: videoLesson.id } },
+        createdBy: { connect: { id: instructor.id } },
+        status: 'READY',
+        durationSeconds: 300,
+        originalFilename: 'follow.mp4',
+        mimeType: 'video/mp4',
+        sizeBytes: 10_000_000n,
+        sourceObjectKey: 'original/follow.mp4',
+        masterPlaylistObjectKey: 'hls/follow.m3u8',
+      },
+    });
+
+    const snapshot = await prisma.codeSnapshot.create({
+      data: {
+        lessonId: videoLesson.id,
+        videoAssetId: videoAsset.id,
+        timestampSeconds: 20,
+        title: 'Milestone at 00:20',
+        language: 'typescript',
+        filesJson: {
+          files: [{ path: 'src/index.ts', content: 'export function buildModel() { return true; }' }],
+        },
+        createdByUserId: instructor.id,
+      },
+    });
+
+    await prisma.videoCheckpoint.create({
+      data: {
+        lessonId: videoLesson.id,
+        videoAssetId: videoAsset.id,
+        timestampSeconds: 20,
+        type: 'INFO',
+        title: 'Practice Step: Build the first TypeScript model',
+        description: null,
+        required: false,
+        practiceEnabled: true,
+        practiceConfigMode: 'AUTO',
+        practiceVerificationMode: 'FILE_COMPARE',
+        practiceSnapshotId: snapshot.id,
+        practiceTargetFilePath: 'src/index.ts',
+      },
+    });
+
+    const publishRes = await request(app)
+      .post(`/api/v1/instructor/courses/${courseId}/publish`)
+      .set('Authorization', `Bearer ${instructor.token}`);
+
+    expect(publishRes.status).toBe(200);
   });
 });

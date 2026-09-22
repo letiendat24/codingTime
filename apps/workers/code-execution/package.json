@@ -3,9 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
-    "dev": "tsx watch src/main.ts",
+    "dev": "if [ -f ../../../.env ]; then set -a; . ../../../.env; set +a; fi; tsx watch src/main.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/main.js",
+    "start": "if [ -f ../../../.env ]; then set -a; . ../../../.env; set +a; fi; node dist/main.js",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"

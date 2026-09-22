@@ -10,10 +10,12 @@ import {
   instructorSnapshotDoesNotOverwriteStudentCode,
   DEFAULT_WORKSPACE_CAPABILITIES,
   defaultVideoLearningMode,
+  findEarliestIncompletePracticeStepAtOrBefore,
   isFolderNonEmpty,
   isCodeAlongRuntimeEnabled,
   isSafeVirtualWorkspacePath,
   normalizeCodeForPracticeCompare,
+  normalizePracticeStepCompletionResponse,
   normalizeVirtualWorkspacePath,
   parseStoredVideoLayoutMode,
   parseStoredVideoLearningMode,
@@ -25,6 +27,7 @@ import {
   selectActiveInstructorSnapshot,
   shouldOpenLessonWorkspace,
   shouldPauseForPracticeStep,
+  watchedPracticeSeekTarget,
   VIDEO_CODE_ALONG_GRID_CLASS_NAME,
   VIDEO_CODE_ALONG_VIDEO_PANE_CLASS_NAME,
 } from './video-practice-view-model';
@@ -147,6 +150,18 @@ describe('video practice view model', () => {
     expect(findBlockingPracticeSeekStep('FOLLOW', 20_000, 80_000, steps)).toBeNull();
   });
 
+  it('practice mode clamps forward seek to the watched boundary', () => {
+    expect(watchedPracticeSeekTarget({ mode: 'PRACTICE', requestedSeconds: 80, furthestWatchedSeconds: 45 })).toBe(45);
+    expect(watchedPracticeSeekTarget({ mode: 'PRACTICE', requestedSeconds: 30, furthestWatchedSeconds: 45 })).toBe(30);
+    expect(watchedPracticeSeekTarget({ mode: 'FOLLOW', requestedSeconds: 80, furthestWatchedSeconds: 45 })).toBe(80);
+  });
+
+  it('finds the earliest incomplete practice step when switching from follow to practice', () => {
+    expect(findEarliestIncompletePracticeStepAtOrBefore(80_000, steps)?.id).toBe('step-20');
+    expect(findEarliestIncompletePracticeStepAtOrBefore(10_000, steps)).toBeNull();
+    expect(findEarliestIncompletePracticeStepAtOrBefore(80_000, steps.map((step) => ({ ...step, completed: true, status: 'COMPLETED' })))?.id).toBeUndefined();
+  });
+
   it('multiple required practice steps block seek at the earliest one', () => {
     const later: VideoPracticeStep = {
       ...steps[1]!,
@@ -214,10 +229,13 @@ describe('video practice view model', () => {
     expect(parseStoredVideoSplitRatio('not-a-number')).toBe(DEFAULT_VIDEO_SPLIT_RATIO);
     expect(parseStoredVideoLayoutMode('FOCUS_VIDEO')).toBe('FOCUS_VIDEO');
     expect(parseStoredVideoLayoutMode('FOCUS_CODE')).toBe('FOCUS_CODE');
+    expect(parseStoredVideoLayoutMode('CUSTOM')).toBe('CUSTOM');
     expect(parseStoredVideoLayoutMode('bad')).toBe('SPLIT');
   });
 
   it('focus modes keep both panes mounted while changing only layout columns', () => {
+    expect(codeAlongSplitColumns('SPLIT', 58)).toContain('45fr');
+    expect(codeAlongSplitColumns('CUSTOM', 58)).toContain('58fr');
     expect(codeAlongSplitColumns('FOCUS_VIDEO', 45)).toContain('72fr');
     expect(codeAlongSplitColumns('FOCUS_VIDEO', 45)).toContain('28fr');
     expect(codeAlongSplitColumns('FOCUS_CODE', 45)).toContain('32fr');
@@ -302,5 +320,30 @@ describe('video practice view model', () => {
     expect(isSafeVirtualWorkspacePath('src\\App.tsx')).toBe(false);
     expect(pathConflictsWithExistingFile('src/App.tsx', files)).toBe(true);
     expect(isFolderNonEmpty('src', files)).toBe(true);
+  });
+
+  it('normalizes direct and enveloped practice completion responses', () => {
+    const direct = {
+      id: 'step-40',
+      status: 'COMPLETED',
+      completedAt: '2026-01-01T00:00:00.000Z',
+      passed: true,
+      message: 'Practice step completed',
+      lessonCompleted: false,
+      verification: {
+        status: 'PASSED',
+        verificationMode: 'FILE_COMPARE',
+        details: ['ok'],
+      },
+    } as const;
+
+    expect(normalizePracticeStepCompletionResponse(direct).verification.status).toBe('PASSED');
+    expect(normalizePracticeStepCompletionResponse({ practiceProgress: direct }).id).toBe('step-40');
+  });
+
+  it('turns malformed practice completion responses into a safe unavailable state', () => {
+    const result = normalizePracticeStepCompletionResponse({ practiceProgress: { id: 'step-40' } });
+    expect(result.passed).toBe(false);
+    expect(result.verification.status).toBe('UNAVAILABLE');
   });
 });

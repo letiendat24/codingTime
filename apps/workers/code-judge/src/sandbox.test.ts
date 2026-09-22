@@ -36,4 +36,24 @@ describe('judge sandbox docker args', () => {
     expect(args).toContain('/tmp:rw,noexec,nosuid,size=16m');
     expect(args).toContain('/tmp/codesync-judge-test/job:/workspace:ro');
   });
+
+  it('uses the platform function adapter for function-contract submissions', () => {
+    const env = loadWorkerEnv({
+      RABBITMQ_URL: 'amqp://localhost:5672',
+      JUDGE_TEMP_ROOT: '/tmp/codesync-judge-test',
+    });
+    const args = buildDockerRunArgs({
+      containerName: 'codesync-judge-test',
+      workDirectory: '/tmp/codesync-judge-test/job',
+      runtime: RUNTIMES.javascript,
+      entryFile: 'index.js',
+      executionMode: 'FUNCTION',
+      timeLimitMs: 1000,
+      memoryLimitMb: 128,
+      env,
+    });
+
+    expect(args).toContain('CODESYNC_ENTRY_FILE=index.js');
+    expect(args[args.length - 1]).toBe('.codesync/practice-function-runner.cjs');
+  });
 });

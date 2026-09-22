@@ -43,6 +43,10 @@ function publish<TPayload extends Record<string, unknown>>(input: {
   });
 }
 
+function safeErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message.slice(0, 500) : 'Unknown worker error';
+}
+
 export async function setupCodeExecutionWorkerTopology(channel: Channel, maxAttempts: number) {
   await channel.assertExchange(CODE_EXCHANGE, 'topic', { durable: true });
   await channel.assertQueue(CODE_EXECUTION_DLQ, { durable: true });
@@ -57,6 +61,15 @@ export async function setupCodeExecutionWorkerTopology(channel: Channel, maxAtte
   });
   await channel.bindQueue(CODE_EXECUTION_QUEUE, CODE_EXCHANGE, CODE_EXECUTION_ROUTING_KEYS.requested);
   await channel.bindQueue(CODE_EXECUTION_DLQ, CODE_EXCHANGE, `${CODE_EXECUTION_ROUTING_KEYS.requested}.dead`);
+
+  log('rabbitmq topology ready', {
+    exchange: CODE_EXCHANGE,
+    queue: CODE_EXECUTION_QUEUE,
+    deadLetterQueue: CODE_EXECUTION_DLQ,
+    routingKey: CODE_EXECUTION_ROUTING_KEYS.requested,
+    deadLetterRoutingKey: `${CODE_EXECUTION_ROUTING_KEYS.requested}.dead`,
+    maxAttempts,
+  });
 }
 
 export async function processCodeExecutionMessage(input: {
@@ -65,23 +78,49 @@ export async function processCodeExecutionMessage(input: {
   readonly env: CodeExecutionWorkerEnv;
 }) {
   const envelope = parseMessage(input.message);
-  const runtime = getRuntime(envelope.payload.language);
 
   log('execution worker received job', {
     executionId: envelope.payload.executionId,
     jobId: envelope.jobId,
     correlationId: envelope.correlationId,
     language: envelope.payload.language,
-  });
-
-  publish<CodeExecutionStartedPayload>({
-    channel: input.channel,
-    routingKey: CODE_EXECUTION_ROUTING_KEYS.started,
-    envelope,
-    payload: { executionId: envelope.payload.executionId },
+    executionMode: envelope.payload.executionMode ?? 'DIRECT',
+    hasStdin: envelope.payload.stdin !== undefined,
   });
 
   try {
+    const runtime = getRuntime(envelope.payload.language);
+
+    if (envelope.payload.executionMode === 'FUNCTION' && envelope.payload.stdin === undefined) {
+      publish<CodeExecutionFailedPayload>({
+        channel: input.channel,
+        routingKey: CODE_EXECUTION_ROUTING_KEYS.failed,
+        envelope,
+        payload: {
+          executionId: envelope.payload.executionId,
+          exitCode: null,
+          stdout: '',
+          stderr: 'Practice run input was not provided by the API.',
+          durationMs: 0,
+          memoryBytes: null,
+          errorCode: 'EXECUTION_INPUT_MISSING',
+          retryable: false,
+        },
+      });
+      logError('practice function execution missing stdin', {
+        executionId: envelope.payload.executionId,
+        jobId: envelope.jobId,
+      });
+      return;
+    }
+
+    publish<CodeExecutionStartedPayload>({
+      channel: input.channel,
+      routingKey: CODE_EXECUTION_ROUTING_KEYS.started,
+      envelope,
+      payload: { executionId: envelope.payload.executionId },
+    });
+
     log('sandbox created', { executionId: envelope.payload.executionId, jobId: envelope.jobId });
     const result = await runInDockerSandbox({
       executionId: envelope.payload.executionId,
@@ -89,6 +128,8 @@ export async function processCodeExecutionMessage(input: {
       runtime,
       entryFile: envelope.payload.entryFile,
       files: envelope.payload.files,
+      ...(envelope.payload.executionMode ? { executionMode: envelope.payload.executionMode } : {}),
+      ...(envelope.payload.stdin !== undefined ? { stdin: envelope.payload.stdin } : {}),
       env: input.env,
     });
     const stderr = result.outputTruncated ? `${result.stderr}\n[CodeSync output truncated]` : result.stderr;
@@ -149,12 +190,27 @@ export async function processCodeExecutionMessage(input: {
       durationMs: result.durationMs,
     });
   } catch (error) {
+    const errorMessage = safeErrorMessage(error);
     logError('execution infrastructure failure', {
       executionId: envelope.payload.executionId,
       jobId: envelope.jobId,
-      errorMessage: error instanceof Error ? error.message.slice(0, 200) : 'Unknown infrastructure error',
+      errorMessage,
     });
-    throw error;
+    publish<CodeExecutionFailedPayload>({
+      channel: input.channel,
+      routingKey: CODE_EXECUTION_ROUTING_KEYS.failed,
+      envelope,
+      payload: {
+        executionId: envelope.payload.executionId,
+        exitCode: null,
+        stdout: '',
+        stderr: 'Code execution worker failed before producing a sandbox result.',
+        durationMs: 0,
+        memoryBytes: null,
+        errorCode: 'EXECUTION_WORKER_FAILED',
+        retryable: true,
+      },
+    });
   } finally {
     log('sandbox removed', { executionId: envelope.payload.executionId, jobId: envelope.jobId });
   }

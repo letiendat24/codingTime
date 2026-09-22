@@ -17,6 +17,14 @@ import {
   quizValidationFailed,
 } from './quiz.errors';
 import { QuizRepository, type QuizAttemptWithAnswers, type QuizWithQuestions } from './quiz.repository';
+import {
+  buildQuizJsonExport,
+  buildQuizXlsxExport,
+  parseQuizImport,
+  type ParsedQuizImport,
+  type QuizImportFormat,
+  type QuizImportMode,
+} from './quiz-import-export';
 import type {
   QuizQuestionInput,
   SubmitQuizAttemptInput,
@@ -159,6 +167,21 @@ function mapInstructorQuiz(quiz: QuizWithQuestions) {
   };
 }
 
+function mapImportQuestion(question: QuizQuestionInput) {
+  return {
+    type: question.type,
+    prompt: question.prompt,
+    explanation: question.explanation ?? null,
+    points: question.points,
+    position: question.position ?? 0,
+    options: question.options.map((option, index) => ({
+      text: option.text,
+      isCorrect: option.isCorrect,
+      position: option.position ?? index + 1,
+    })),
+  };
+}
+
 function mapStudentQuiz(quiz: QuizWithQuestions, attempts: Awaited<ReturnType<QuizRepository['listAttemptsForQuiz']>>) {
   return {
     id: quiz.id,
@@ -235,6 +258,37 @@ function normalizeOptions(input: QuizQuestionInput | UpdateQuizQuestionInput) {
     isCorrect: option.isCorrect,
     position: option.position ?? index + 1,
   }));
+}
+
+function normalizeImportedQuestions(parsed: ParsedQuizImport) {
+  if (parsed.errors.length > 0) {
+    throw quizValidationFailed(parsed.errors.map((error) => `Row ${error.row}: ${error.message}`));
+  }
+
+  if (parsed.questions.length === 0) {
+    throw quizValidationFailed(['Import did not contain any valid questions']);
+  }
+
+  for (const question of parsed.questions) {
+    validateQuestionPayload(question);
+  }
+
+  return parsed.questions.map((question, index) => ({
+    type: question.type,
+    prompt: question.prompt,
+    explanation: question.explanation ?? null,
+    points: new Prisma.Decimal(question.points),
+    position: index + 1,
+    options: normalizeOptions(question) ?? [],
+  }));
+}
+
+function parseImportOrThrow(format: QuizImportFormat, contentBase64: string) {
+  try {
+    return parseQuizImport(format, contentBase64);
+  } catch (error) {
+    throw quizValidationFailed([error instanceof Error ? error.message : 'Import file could not be parsed']);
+  }
 }
 
 export class QuizService {
@@ -369,6 +423,90 @@ export class QuizService {
         await repository.setQuestionPosition(questionId, index + 1);
       }
     });
+  }
+
+  async previewQuestionImport(instructorId: string, quizId: string, input: { readonly format: QuizImportFormat; readonly contentBase64: string }) {
+    const quiz = await this.quizzes.findQuizForInstructor(instructorId, quizId);
+
+    if (!quiz) {
+      throw quizNotFound();
+    }
+
+    const parsed = parseImportOrThrow(input.format, input.contentBase64);
+    return {
+      summary: parsed.summary,
+      errors: parsed.errors,
+      questions: parsed.questions.map(mapImportQuestion),
+    };
+  }
+
+  async importQuestions(
+    instructorId: string,
+    quizId: string,
+    input: { readonly format: QuizImportFormat; readonly contentBase64: string; readonly mode: QuizImportMode },
+  ) {
+    const quiz = await this.quizzes.findQuizForInstructor(instructorId, quizId);
+
+    if (!quiz) {
+      throw quizNotFound();
+    }
+
+    const parsed = parseImportOrThrow(input.format, input.contentBase64);
+    const questions = normalizeImportedQuestions(parsed);
+
+    const updated = await this.prisma.$transaction(async (transaction) => {
+      const repository = new QuizRepository(transaction);
+
+      if (input.mode === 'REPLACE') {
+        const attemptCount = await repository.countAttempts(quizId);
+        if (attemptCount > 0) {
+          throw quizValidationFailed(['Cannot replace quiz questions after student attempts exist. Use append or create a new quiz version.']);
+        }
+
+        return repository.replaceQuestions({ quizId, questions });
+      }
+
+      const startPosition = await repository.nextQuestionPosition(quizId);
+      return repository.createQuestions({ quizId, startPosition, questions });
+    });
+
+    return {
+      quiz: mapInstructorQuiz(updated),
+      summary: parsed.summary,
+    };
+  }
+
+  async exportQuestions(instructorId: string, quizId: string, format: QuizImportFormat) {
+    const quiz = await this.quizzes.findQuizForInstructor(instructorId, quizId);
+
+    if (!quiz) {
+      throw quizNotFound();
+    }
+
+    const questions = quiz.questions.map((question) => ({
+      type: question.type,
+      prompt: question.prompt,
+      explanation: question.explanation,
+      points: Number(question.points),
+      position: question.position,
+      options: question.options.map((option) => ({
+        text: option.text,
+        isCorrect: option.isCorrect,
+        position: option.position,
+      })),
+    }));
+
+    const buffer = format === 'JSON' ? buildQuizJsonExport(questions) : buildQuizXlsxExport(questions);
+    const extension = format === 'JSON' ? 'json' : 'xlsx';
+    const contentType = format === 'JSON'
+      ? 'application/json; charset=utf-8'
+      : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+    return {
+      buffer,
+      contentType,
+      filename: `quiz-${quiz.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'questions'}-questions.${extension}`,
+    };
   }
 
   async getStudentQuiz(studentId: string, lessonId: string) {

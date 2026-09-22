@@ -33,6 +33,7 @@ export function createJudgeRouter(
   router.post('/workspaces/:workspaceId/submissions', ...studentOnly, submitLimit, asyncHandler(controller.submitWorkspace));
   router.get('/workspaces/:workspaceId/submissions', ...studentOnly, asyncHandler(controller.listSubmissions));
   router.get('/submissions/:submissionId', ...studentOnly, asyncHandler(controller.getSubmission));
+  router.post('/learning/practice-steps/:checkpointId/submissions', ...studentOnly, submitLimit, asyncHandler(controller.submitVideoPracticeStep));
 
   return router;
 }

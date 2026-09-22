@@ -22,6 +22,10 @@ export const workspaceFileSchema = z.object({
   content: z.string(),
 });
 
+export const videoPracticeSubmissionSchema = z.object({
+  workspaceId: z.string().uuid(),
+});
+
 export const upsertCodingConfigSchema = z.object({
   language: z.string().min(1).max(40).default('javascript'),
   entryFile: z.string().min(1).max(255).default('index.js'),
@@ -56,3 +60,4 @@ export type UpsertCodingConfigInput = z.infer<typeof upsertCodingConfigSchema>;
 export type TestCaseInput = z.infer<typeof testCaseInputSchema>;
 export type TestCaseUpdateInput = z.infer<typeof testCaseUpdateSchema>;
 export type SubmissionHistoryQuery = z.infer<typeof submissionHistoryQuerySchema>;
+export type VideoPracticeSubmissionInput = z.infer<typeof videoPracticeSubmissionSchema>;

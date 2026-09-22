@@ -72,6 +72,8 @@ export interface CodeExecutionRequestedPayload extends AsyncMessagePayload {
   readonly language: string;
   readonly files: readonly CodeExecutionFile[];
   readonly entryFile: string;
+  readonly executionMode?: 'DIRECT' | 'FUNCTION';
+  readonly stdin?: string;
 }
 
 export interface CodeExecutionStartedPayload extends AsyncMessagePayload {
@@ -141,7 +143,13 @@ export interface CodeJudgeRequestedPayload extends AsyncMessagePayload {
   readonly scoringMode: 'ALL_OR_NOTHING' | 'WEIGHTED';
   readonly files: readonly CodeExecutionFile[];
   readonly testCases: readonly CodeJudgeTestCasePayload[];
+  readonly executionMode?: 'DIRECT' | 'FUNCTION';
 }
+
+export {
+  PRACTICE_FUNCTION_ADAPTER_PATH,
+  PRACTICE_FUNCTION_ADAPTER_SOURCE,
+} from './practice-function-adapter';
 
 export interface CodeJudgeStartedPayload extends AsyncMessagePayload {
   readonly submissionId: string;
@@ -296,3 +304,5 @@ export const PROJECT_GRADING_ROUTING_KEYS = {
   failed: 'project.grading.failed',
   timedOut: 'project.grading.timed_out',
 } as const;
+
+export * from './video-practice-auto-config';

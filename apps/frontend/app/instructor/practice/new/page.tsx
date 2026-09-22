@@ -18,8 +18,12 @@ export default function NewPracticeProblemPage() {
   const [title, setTitle] = useState('');
   const [slug, setSlug] = useState('');
   const [description, setDescription] = useState('');
+  const [inputFormat, setInputFormat] = useState('');
+  const [outputFormat, setOutputFormat] = useState('');
+  const [constraints, setConstraints] = useState('');
   const [difficulty, setDifficulty] = useState<'EASY' | 'MEDIUM' | 'HARD'>('EASY');
-  const [starterCode, setStarterCode] = useState('function solution(input) {\n  // Write your code here\n  return input;\n}\n\nmodule.exports = { solution };\n');
+  const [starterCode, setStarterCode] = useState('function solution(input) {\n  // Write your solution here.\n  return input;\n}\n\nmodule.exports = { solution };\n');
+  const [referenceCode, setReferenceCode] = useState('function solution(input) {\n  return input;\n}\n\nmodule.exports = { solution };\n');
 
   const create = useMutation({
     mutationFn: () => requestJson<{ readonly problem: InstructorPracticeProblem }>('/instructor/practice/problems', {
@@ -28,8 +32,14 @@ export default function NewPracticeProblemPage() {
         title,
         slug: slug || undefined,
         description,
+        inputFormat,
+        outputFormat,
+        constraints,
         difficulty,
         starterFiles: [{ path: 'index.js', content: starterCode }],
+        referenceFiles: [{ path: 'index.js', content: referenceCode }],
+        executionContract: 'FUNCTION',
+        comparisonPolicy: 'NORMALIZED_TEXT',
         tags: [],
       }),
     }),
@@ -115,6 +125,45 @@ export default function NewPracticeProblemPage() {
                 onChange={(event) => setDescription(event.target.value)}
               />
             </div>
+
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-foreground">
+                  Input Format <span className="text-destructive">*</span>
+                </label>
+                <Textarea
+                  required
+                  className="min-h-28 text-sm"
+                  placeholder="Describe input, e.g. an object with nums and target."
+                  value={inputFormat}
+                  onChange={(event) => setInputFormat(event.target.value)}
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-foreground">
+                  Output Format <span className="text-destructive">*</span>
+                </label>
+                <Textarea
+                  required
+                  className="min-h-28 text-sm"
+                  placeholder="Describe the returned value, e.g. an array of two indices."
+                  value={outputFormat}
+                  onChange={(event) => setOutputFormat(event.target.value)}
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-foreground">
+                  Constraints <span className="text-destructive">*</span>
+                </label>
+                <Textarea
+                  required
+                  className="min-h-28 text-sm"
+                  placeholder="List input limits and edge cases."
+                  value={constraints}
+                  onChange={(event) => setConstraints(event.target.value)}
+                />
+              </div>
+            </div>
           </CardContent>
         </Card>
 
@@ -134,6 +183,23 @@ export default function NewPracticeProblemPage() {
                 onChange={(event) => setStarterCode(event.target.value)}
               />
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Reference Solution</CardTitle>
+            <CardDescription>
+              Instructor-only solution used to verify the authoring contract. It is never exposed to students.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Textarea
+              required
+              className="min-h-44 font-mono text-sm leading-relaxed"
+              value={referenceCode}
+              onChange={(event) => setReferenceCode(event.target.value)}
+            />
           </CardContent>
         </Card>
 

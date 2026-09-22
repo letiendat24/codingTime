@@ -6,16 +6,18 @@ import {
   Archive,
   ArrowLeft,
   CheckCircle,
+  Code2,
+  Download,
   FileText,
+  FolderGit2,
   HelpCircle,
   Info,
   Layers,
   Plus,
   RotateCcw,
-  Video as VideoIcon,
-  Code2,
-  FolderGit2,
   Trash2,
+  Upload,
+  Video as VideoIcon,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
@@ -48,7 +50,14 @@ import {
   type InstructorQuizQuestion,
   type ProjectCheckpointConfigResponse,
   type ProjectRubricCriterion,
+  type QuizImportFormat,
+  type QuizImportMode,
+  type QuizImportPreview,
   type VideoCheckpoint,
+  type CoursePublishIssue,
+  ApiError,
+  apiUrl,
+  getAccessToken,
   requestJson,
 } from '../../../../lib/api';
 import { useI18n } from '../../../../providers/i18n-provider';
@@ -56,6 +65,18 @@ import { useToast } from '../../../../providers/toast-provider';
 
 interface CourseResponse {
   readonly course: CourseDetail;
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read selected file'));
+    reader.onload = () => {
+      const value = typeof reader.result === 'string' ? reader.result : '';
+      resolve(value.includes(',') ? value.slice(value.indexOf(',') + 1) : value);
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 export default function InstructorCourseDetailPage() {
@@ -72,6 +93,8 @@ export default function InstructorCourseDetailPage() {
   const [lessonType, setLessonType] = useState('VIDEO');
   const [selectedLessonId, setSelectedLessonId] = useState<string | null>(null);
   const [showUnpublishDialog, setShowUnpublishDialog] = useState(false);
+  const [publishIssues, setPublishIssues] = useState<readonly CoursePublishIssue[] | null>(null);
+  const [showPublishIssuesDialog, setShowPublishIssuesDialog] = useState(false);
 
   const course = useQuery({
     queryKey: ['instructor-course', params.id],
@@ -122,7 +145,21 @@ export default function InstructorCourseDetailPage() {
       void invalidate();
     },
     onError: (error) => {
-      toast.error('Failed to publish course', error instanceof Error ? error.message : undefined);
+      if (error instanceof ApiError && error.issues && error.issues.length > 0) {
+        setPublishIssues(error.issues);
+        setShowPublishIssuesDialog(true);
+        const firstIssue = error.issues[0];
+        if (error.issues.length === 1 && firstIssue) {
+          toast.error(
+            `Cannot publish: ${firstIssue.checkpointTitle ? `"${firstIssue.checkpointTitle}"` : 'Practice Step'}`,
+            `${firstIssue.message} Fix: ${firstIssue.fix}`,
+          );
+        } else {
+          toast.error('Cannot publish course', `${error.issues.length} issues need attention.`);
+        }
+      } else {
+        toast.error('Failed to publish course', error instanceof Error ? error.message : undefined);
+      }
     },
   });
 
@@ -196,6 +233,42 @@ export default function InstructorCourseDetailPage() {
           >
             Move to Draft
           </Button>
+        </div>
+      </Dialog>
+
+      {/* Publish Readiness Issues Dialog */}
+      <Dialog
+        open={showPublishIssuesDialog}
+        onClose={() => setShowPublishIssuesDialog(false)}
+        title="Cannot Publish Course"
+        description="The course cannot be published yet because one or more practice steps have configuration requirements that need attention."
+      >
+        <div className="space-y-4 pt-2">
+          <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
+            {publishIssues?.map((issue, idx) => (
+              <div key={idx} className="rounded-lg border border-destructive/30 bg-destructive/5 p-3.5 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-xs text-foreground">
+                    {issue.checkpointTitle ? `Checkpoint: "${issue.checkpointTitle}"` : 'Practice Checkpoint'}
+                  </span>
+                  <span className="rounded bg-destructive/20 text-destructive text-[10px] font-bold px-1.5 py-0.5">
+                    {issue.severity}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">{issue.message}</p>
+                <div className="rounded-md bg-background/90 p-2.5 text-xs border border-border/70">
+                  <span className="font-semibold text-foreground">Suggested Fix: </span>
+                  <span className="text-muted-foreground">{issue.fix}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex justify-end gap-2 pt-3 border-t border-border">
+            <Button size="sm" onClick={() => setShowPublishIssuesDialog(false)}>
+              Close & Fix Issues
+            </Button>
+          </div>
         </div>
       </Dialog>
 
@@ -1387,6 +1460,13 @@ function InstructorQuizLessonPanel({
   const [showResultImmediately, setShowResultImmediately] = useState(true);
   const [newQuestionType, setNewQuestionType] = useState<'SINGLE_CHOICE' | 'MULTIPLE_CHOICE'>('SINGLE_CHOICE');
   const [newQuestionPrompt, setNewQuestionPrompt] = useState('');
+  const [importFormat, setImportFormat] = useState<QuizImportFormat>('XLSX');
+  const [importMode, setImportMode] = useState<QuizImportMode>('APPEND');
+  const [importFileName, setImportFileName] = useState('');
+  const [importContentBase64, setImportContentBase64] = useState('');
+  const [importPreview, setImportPreview] = useState<QuizImportPreview | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const quiz = useQuery({
     queryKey: ['instructor', 'quiz', lessonId],
@@ -1482,6 +1562,123 @@ function InstructorQuizLessonPanel({
     },
   });
 
+  const previewImport = useMutation({
+    mutationFn: (input: { readonly format: QuizImportFormat; readonly contentBase64: string }) => {
+      const quizId = currentQuiz?.id;
+      if (!quizId) {
+        throw new Error('Save quiz settings before importing questions');
+      }
+
+      return requestJson<QuizImportPreview>(`/instructor/quizzes/${quizId}/questions/import-preview`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+    },
+    onSuccess: (preview) => {
+      setImportPreview(preview);
+      setImportError(null);
+    },
+    onError: (err) => {
+      setImportPreview(null);
+      setImportError(err instanceof Error ? err.message : 'Import preview failed');
+    },
+  });
+
+  const commitImport = useMutation({
+    mutationFn: () => {
+      const quizId = currentQuiz?.id;
+      if (!quizId || !importContentBase64) {
+        throw new Error('Preview a quiz import file before confirming');
+      }
+
+      return requestJson<{ readonly quiz: InstructorQuiz; readonly summary: QuizImportPreview['summary'] }>(
+        `/instructor/quizzes/${quizId}/questions/import`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            format: importFormat,
+            contentBase64: importContentBase64,
+            mode: importMode,
+          }),
+        },
+      );
+    },
+    onSuccess: async (result) => {
+      toast.success('Quiz questions imported', `${result.summary.validRows} question(s) added`);
+      setImportPreview(null);
+      setImportContentBase64('');
+      setImportFileName('');
+      setImportError(null);
+      await queryClient.invalidateQueries({ queryKey: ['instructor', 'quiz', lessonId] });
+    },
+    onError: (err) => {
+      toast.error('Failed to import questions', err instanceof Error ? err.message : undefined);
+    },
+  });
+
+  async function handleImportFile(file: File | null) {
+    setImportPreview(null);
+    setImportError(null);
+    setImportContentBase64('');
+    setImportFileName(file?.name ?? '');
+
+    if (!file) {
+      return;
+    }
+
+    const nextFormat = file.name.toLowerCase().endsWith('.json') ? 'JSON' : 'XLSX';
+    setImportFormat(nextFormat);
+
+    try {
+      const contentBase64 = await fileToBase64(file);
+      setImportContentBase64(contentBase64);
+      previewImport.mutate({ format: nextFormat, contentBase64 });
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : 'Could not read selected file');
+    }
+  }
+
+  async function downloadQuizQuestions(format: 'json' | 'xlsx') {
+    const quizId = currentQuiz?.id;
+    if (!quizId) {
+      setExportError('Save quiz settings before exporting questions');
+      return;
+    }
+
+    setExportError(null);
+    const headers = new Headers();
+    const accessToken = getAccessToken();
+    if (accessToken) {
+      headers.set('Authorization', `Bearer ${accessToken}`);
+    }
+
+    try {
+      const response = await fetch(`${apiUrl}/instructor/quizzes/${quizId}/questions/export?format=${format}`, {
+        headers,
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        const body = (await response.json().catch(() => undefined)) as { readonly error?: { readonly message?: string } } | undefined;
+        throw new Error(body?.error?.message ?? 'Export failed');
+      }
+
+      const blob = await response.blob();
+      const disposition = response.headers.get('Content-Disposition') ?? '';
+      const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? `quiz-questions.${format}`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'Export failed');
+    }
+  }
+
   function moveQuestion(questionId: string, direction: -1 | 1) {
     const questions = currentQuiz?.questions ?? [];
     const index = questions.findIndex((question) => question.id === questionId);
@@ -1564,6 +1761,103 @@ function InstructorQuizLessonPanel({
           <Badge tone={currentQuiz && currentQuiz.questions.length > 0 ? 'success' : 'warning'}>
             {currentQuiz?.questions.length ?? 0}
           </Badge>
+        </div>
+
+        <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-sm font-semibold text-foreground">Bulk import / export</p>
+              <p className="text-xs text-muted-foreground">Preview XLSX or JSON questions before appending or replacing.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="secondary" disabled={!currentQuiz} onClick={() => void downloadQuizQuestions('xlsx')}>
+                <Download className="h-4 w-4" />
+                XLSX
+              </Button>
+              <Button size="sm" variant="secondary" disabled={!currentQuiz} onClick={() => void downloadQuizQuestions('json')}>
+                <Download className="h-4 w-4" />
+                JSON
+              </Button>
+            </div>
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_130px_150px_auto]">
+            <Input
+              type="file"
+              accept=".xlsx,.json,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              disabled={!currentQuiz || previewImport.isPending || commitImport.isPending}
+              onChange={(event) => void handleImportFile(event.target.files?.[0] ?? null)}
+            />
+            <Select
+              value={importFormat}
+              onChange={(event) => {
+                setImportFormat(event.target.value as QuizImportFormat);
+                setImportPreview(null);
+              }}
+              disabled={previewImport.isPending || commitImport.isPending}
+            >
+              <option value="XLSX">XLSX</option>
+              <option value="JSON">JSON</option>
+            </Select>
+            <Select
+              value={importMode}
+              onChange={(event) => setImportMode(event.target.value as QuizImportMode)}
+              disabled={commitImport.isPending}
+            >
+              <option value="APPEND">Append</option>
+              <option value="REPLACE">Replace</option>
+            </Select>
+            <Button
+              size="sm"
+              disabled={!importContentBase64 || !currentQuiz || previewImport.isPending || commitImport.isPending}
+              isLoading={previewImport.isPending}
+              onClick={() => previewImport.mutate({ format: importFormat, contentBase64: importContentBase64 })}
+            >
+              <Upload className="h-4 w-4" />
+              Preview
+            </Button>
+          </div>
+
+          {importFileName ? <p className="text-xs text-muted-foreground">Selected: {importFileName}</p> : null}
+          {importError ? <p className="text-xs font-medium text-destructive">{importError}</p> : null}
+          {exportError ? <p className="text-xs font-medium text-destructive">{exportError}</p> : null}
+
+          {importPreview ? (
+            <div className="rounded-md border border-border bg-background p-3 space-y-2">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <Badge tone={importPreview.errors.length === 0 ? 'success' : 'warning'}>
+                  {importPreview.summary.validRows} valid
+                </Badge>
+                <Badge tone={importPreview.summary.invalidRows === 0 ? 'neutral' : 'danger'}>
+                  {importPreview.summary.invalidRows} invalid
+                </Badge>
+                <span className="text-muted-foreground">{importPreview.summary.totalRows} total row(s)</span>
+              </div>
+
+              {importPreview.errors.length > 0 ? (
+                <div className="max-h-28 overflow-auto rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive">
+                  {importPreview.errors.slice(0, 8).map((error) => (
+                    <p key={`${error.row}-${error.message}`}>Row {error.row}: {error.message}</p>
+                  ))}
+                  {importPreview.errors.length > 8 ? <p>And {importPreview.errors.length - 8} more error(s).</p> : null}
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs text-muted-foreground">
+                    Ready to {importMode === 'REPLACE' ? 'replace current questions with' : 'append'} {importPreview.questions.length} question(s).
+                  </p>
+                  <Button
+                    size="sm"
+                    isLoading={commitImport.isPending}
+                    disabled={importPreview.questions.length === 0 || commitImport.isPending}
+                    onClick={() => commitImport.mutate()}
+                  >
+                    Confirm Import
+                  </Button>
+                </div>
+              )}
+            </div>
+          ) : null}
         </div>
 
         {quiz.isLoading ? <PageSkeleton /> : null}

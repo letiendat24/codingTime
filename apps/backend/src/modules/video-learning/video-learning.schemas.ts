@@ -31,18 +31,31 @@ export const checkpointUpdateSchema = checkpointInputSchema.partial();
 export const checkpointProgressStatusSchema = z.nativeEnum(CheckpointProgressStatus);
 
 export const practiceStepConfigSchema = z.object({
-  practiceEnabled: z.coerce.boolean(),
-  practiceVerificationMode: z.nativeEnum(VideoPracticeVerificationMode).default(VideoPracticeVerificationMode.NONE),
-  practiceBehavior: z.nativeEnum(VideoPracticeBehavior).default(VideoPracticeBehavior.GUIDED),
+  configMode: z.enum(['AUTO', 'MANUAL_OVERRIDE']).optional(),
+  practiceEnabled: z.coerce.boolean().optional(),
+  practiceVerificationMode: z.nativeEnum(VideoPracticeVerificationMode).optional(),
+  practiceBehavior: z.nativeEnum(VideoPracticeBehavior).optional(),
+  overrideVerification: z.nativeEnum(VideoPracticeVerificationMode).optional().nullable(),
+  overrideBehavior: z.nativeEnum(VideoPracticeBehavior).optional().nullable(),
   practiceSnapshotId: z.string().uuid().optional().nullable(),
   practiceTargetFilePath: z.string().trim().min(1).max(240).optional().nullable(),
   practiceTargetStartLine: z.coerce.number().int().positive().optional().nullable(),
   practiceTargetEndLine: z.coerce.number().int().positive().optional().nullable(),
   practiceVerificationRules: z.unknown().optional().nullable(),
+  workspaceType: z.nativeEnum(VideoWorkspaceType).optional().nullable(),
+  allowRun: z.coerce.boolean().optional().nullable(),
+  allowCheck: z.coerce.boolean().optional().nullable(),
+  allowJudge: z.coerce.boolean().optional().nullable(),
+  allowCreateFiles: z.coerce.boolean().optional().nullable(),
+  allowCreateFolders: z.coerce.boolean().optional().nullable(),
+  allowRenameFiles: z.coerce.boolean().optional().nullable(),
+  allowDeleteFiles: z.coerce.boolean().optional().nullable(),
+  allowSkip: z.coerce.boolean().optional().nullable(),
 });
 
 export const practiceStepCompleteSchema = z.object({
   workspaceId: z.string().uuid().optional(),
+  submissionId: z.string().uuid().optional(),
 });
 
 const fileSchema = z.object({
@@ -72,6 +85,8 @@ export const codeAlongConfigSchema = z.object({
   allowRun: z.coerce.boolean().default(true),
   allowCheck: z.coerce.boolean().default(true),
   allowJudge: z.coerce.boolean().default(true),
+  defaultPracticeBehavior: z.nativeEnum(VideoPracticeBehavior).default(VideoPracticeBehavior.REQUIRED),
+  defaultVerificationStrategy: z.string().trim().default('AUTO'),
 });
 
 export type VideoProgressInput = z.infer<typeof videoProgressSchema>;

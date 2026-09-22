@@ -190,9 +190,20 @@ describe('practice center integration', () => {
       .send({
         title: 'Add two numbers',
         slug: 'add-two-numbers',
-        description: 'Read two numbers and print their sum.',
+        description: 'Return the sum of two numbers.',
+        inputFormat: 'solution(input) receives { "a": number, "b": number }.',
+        outputFormat: 'Return the numeric sum.',
+        constraints: '-100000 <= a, b <= 100000',
         difficulty: PracticeDifficulty.EASY,
-        starterFiles: [{ path: 'index.js', content: 'const fs = require("fs");\n' }],
+        starterFiles: [{
+          path: 'index.js',
+          content: 'function solution(input) {\n  return input.a + input.b;\n}\n\nmodule.exports = { solution };\n',
+        }],
+        referenceFiles: [{
+          path: 'index.js',
+          content: 'function solution(input) {\n  return input.a + input.b;\n}\n\nmodule.exports = { solution };\n',
+        }],
+        executionContract: 'FUNCTION',
         tags: ['arrays', 'warmup'],
       });
     const publishBeforeTests = await request(app)
@@ -202,11 +213,19 @@ describe('practice center integration', () => {
     const publicTest = await request(app)
       .post(`/api/v1/instructor/practice/problems/${created.body.problem.id}/test-cases`)
       .set('Authorization', `Bearer ${instructor.token}`)
-      .send({ name: 'Sample', visibility: TestCaseVisibility.PUBLIC, input: '2 3', expectedOutput: '5', weight: 50 });
+      .send({ name: 'Sample', visibility: TestCaseVisibility.PUBLIC, input: '{"a":2,"b":3}', expectedOutput: '5', weight: 50 });
     const hiddenTest = await request(app)
       .post(`/api/v1/instructor/practice/problems/${created.body.problem.id}/test-cases`)
       .set('Authorization', `Bearer ${instructor.token}`)
-      .send({ name: 'Hidden', visibility: TestCaseVisibility.HIDDEN, input: '10 20', expectedOutput: '30', weight: 50 });
+      .send({ name: 'Hidden', visibility: TestCaseVisibility.HIDDEN, input: '{"a":10,"b":20}', expectedOutput: '30', weight: 50 });
+    const publishBeforeValidation = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${created.body.problem.id}/publish`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send();
+    const validated = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${created.body.problem.id}/validate`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send();
     const published = await request(app)
       .post(`/api/v1/instructor/practice/problems/${created.body.problem.id}/publish`)
       .set('Authorization', `Bearer ${instructor.token}`)
@@ -221,7 +240,7 @@ describe('practice center integration', () => {
     await request(app)
       .put(`/api/v1/workspaces/${opened.body.workspace.id}/files`)
       .set('Authorization', `Bearer ${student.token}`)
-      .send({ files: [{ path: 'index.js', content: 'console.log("5");\n' }] });
+      .send({ files: [{ path: 'index.js', content: 'function solution(input) {\n  return input.a + input.b;\n}\n\nmodule.exports = { solution };\n' }] });
     const submitted = await request(app)
       .post(`/api/v1/practice/problems/${created.body.problem.id}/submissions`)
       .set('Authorization', `Bearer ${student.token}`)
@@ -232,10 +251,13 @@ describe('practice center integration', () => {
     expect(publishBeforeTests.status).toBe(422);
     expect(publicTest.status).toBe(201);
     expect(hiddenTest.status).toBe(201);
+    expect(publishBeforeValidation.status).toBe(422);
+    expect(validated.status).toBe(200);
+    expect(validated.body.valid).toBe(true);
     expect(published.body.problem.status).toBe(PracticeProblemStatus.PUBLISHED);
     expect(catalog.body.items).toHaveLength(1);
     expect(detail.body.problem.publicTests).toHaveLength(1);
-    expect(JSON.stringify(detail.body)).not.toContain('10 20');
+    expect(JSON.stringify(detail.body)).not.toContain('"a":10');
     expect(opened.body.workspace.practiceProblemId).toBe(created.body.problem.id);
     expect(submitted.status).toBe(202);
     expect(publishedMessages).toHaveLength(1);
@@ -259,8 +281,8 @@ describe('practice center integration', () => {
         durationMs: 40,
         peakMemoryBytes: null,
         testResults: [
-          { testCaseId: publicTest.body.testCase.id, name: 'Sample', visibility: 'PUBLIC', status: 'PASSED', scoreEarned: 50, actualOutput: '5\n', stderr: '', durationMs: 20, memoryBytes: null },
-          { testCaseId: hiddenTest.body.testCase.id, name: 'Hidden', visibility: 'HIDDEN', status: 'PASSED', scoreEarned: 50, actualOutput: '30\n', stderr: 'secret', durationMs: 20, memoryBytes: null },
+          { testCaseId: publicTest.body.testCase.id, name: 'Sample', visibility: 'PUBLIC', status: 'PASSED', scoreEarned: 50, actualOutput: '5', stderr: '', durationMs: 20, memoryBytes: null },
+          { testCaseId: hiddenTest.body.testCase.id, name: 'Hidden', visibility: 'HIDDEN', status: 'PASSED', scoreEarned: 50, actualOutput: '30', stderr: 'secret', durationMs: 20, memoryBytes: null },
         ],
       },
     };
@@ -285,5 +307,69 @@ describe('practice center integration', () => {
     expect(submissionDetail.body.submission.practiceProblemId).toBe(created.body.problem.id);
     expect(JSON.stringify(submissionDetail.body)).not.toContain('secret');
     expect(history.body.items[0].id).toBe(submitted.body.id);
+  });
+
+  it('imports tests and blocks publishing stale practice validation', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+
+    const created = await request(app)
+      .post('/api/v1/instructor/practice/problems')
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({
+        title: 'Echo text',
+        slug: 'echo-text',
+        description: 'Return the input value.',
+        inputFormat: 'solution(input) receives a JSON value.',
+        outputFormat: 'Return the same JSON value.',
+        constraints: 'Input is at most 1000 bytes.',
+        difficulty: PracticeDifficulty.EASY,
+        starterFiles: [{ path: 'index.js', content: 'function solution(input) {\n  return input;\n}\n\nmodule.exports = { solution };\n' }],
+        referenceFiles: [{ path: 'index.js', content: 'function solution(input) {\n  return input;\n}\n\nmodule.exports = { solution };\n' }],
+        executionContract: 'FUNCTION',
+        tags: ['warmup'],
+      });
+
+    const imported = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${created.body.problem.id}/test-cases/import`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({
+        version: 1,
+        mode: 'REPLACE',
+        testCases: [
+          { name: 'Public echo', visibility: TestCaseVisibility.PUBLIC, input: '"hello"', expectedOutput: '"hello"', weight: 50 },
+          { name: 'Hidden echo', visibility: TestCaseVisibility.HIDDEN, input: '"secret"', expectedOutput: '"secret"', weight: 50 },
+        ],
+      });
+    const validated = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${created.body.problem.id}/validate`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send();
+    const editAfterValidation = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${created.body.problem.id}/test-cases`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({ name: 'Another public', visibility: TestCaseVisibility.PUBLIC, input: '"bye"', expectedOutput: '"bye"', weight: 10 });
+    const stalePublish = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${created.body.problem.id}/publish`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send();
+    const revalidated = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${created.body.problem.id}/validate`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send();
+    const published = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${created.body.problem.id}/publish`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send();
+
+    expect(imported.status).toBe(201);
+    expect(imported.body.imported).toBe(2);
+    expect(imported.body.publicCount).toBe(1);
+    expect(imported.body.hiddenCount).toBe(1);
+    expect(validated.body.valid).toBe(true);
+    expect(editAfterValidation.status).toBe(201);
+    expect(stalePublish.status).toBe(422);
+    expect(JSON.stringify(stalePublish.body)).toContain('Problem content changed after the last successful validation');
+    expect(revalidated.body.valid).toBe(true);
+    expect(published.body.problem.status).toBe(PracticeProblemStatus.PUBLISHED);
   });
 });

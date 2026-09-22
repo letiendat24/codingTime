@@ -93,7 +93,17 @@ export class CodeExecutionRepository {
   async findWorkspaceForUser(userId: string, workspaceId: string) {
     return this.prisma.workspace.findFirst({
       where: { id: workspaceId, userId },
-      include: { files: { orderBy: { path: 'asc' } } },
+      include: {
+        files: { orderBy: { path: 'asc' } },
+        practiceProblem: {
+          include: {
+            testCases: {
+              where: { visibility: 'PUBLIC' },
+              orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+            },
+          },
+        },
+      },
     });
   }
 
@@ -264,6 +274,60 @@ export class CodeExecutionRepository {
         status: { in: [ExecutionStatus.QUEUED, ExecutionStatus.RUNNING] },
       },
     });
+  }
+
+  async recoverStaleExecutionsForUser(input: {
+    readonly userId: string;
+    readonly queuedBefore: Date;
+    readonly runningBefore: Date;
+    readonly recoveredAt: Date;
+  }) {
+    const staleQueued = await this.prisma.executionRequest.findMany({
+      where: {
+        userId: input.userId,
+        status: ExecutionStatus.QUEUED,
+        queuedAt: { lt: input.queuedBefore },
+      },
+      select: { id: true },
+    });
+    const staleRunning = await this.prisma.executionRequest.findMany({
+      where: {
+        userId: input.userId,
+        status: ExecutionStatus.RUNNING,
+        startedAt: { lt: input.runningBefore },
+      },
+      select: { id: true },
+    });
+
+    for (const execution of staleQueued) {
+      await this.finishExecution({
+        executionId: execution.id,
+        status: ExecutionStatus.FAILED,
+        exitCode: null,
+        stdout: '',
+        stderr: 'Execution expired before the worker started it.',
+        durationMs: 0,
+        memoryBytes: null,
+        errorCode: 'EXECUTION_STALE_QUEUED',
+        finishedAt: input.recoveredAt,
+      });
+    }
+
+    for (const execution of staleRunning) {
+      await this.finishExecution({
+        executionId: execution.id,
+        status: ExecutionStatus.TIMED_OUT,
+        exitCode: null,
+        stdout: '',
+        stderr: 'Execution exceeded the configured timeout.',
+        durationMs: 0,
+        memoryBytes: null,
+        errorCode: 'EXECUTION_STALE_RUNNING',
+        finishedAt: input.recoveredAt,
+      });
+    }
+
+    return { queued: staleQueued.length, running: staleRunning.length };
   }
 
   async createExecution(input: {

@@ -30,6 +30,7 @@ import {
   type StudentTranscript,
   type StudentTranscriptTrack,
   type ProjectSubmissionDetail,
+  type JudgeSubmissionDetail,
   type PracticeStepCompletion,
   type VideoCheckpoint,
   type VideoPracticeStep,
@@ -63,13 +64,16 @@ import {
   codeAlongSplitColumns,
   DEFAULT_VIDEO_SPLIT_RATIO,
   DEFAULT_WORKSPACE_CAPABILITIES,
+  findEarliestIncompletePracticeStepAtOrBefore,
   isCodeAlongRuntimeEnabled,
+  normalizePracticeStepCompletionResponse,
   parseStoredVideoLearningMode,
   parseStoredVideoLayoutMode,
   parseStoredVideoSplitRatio,
   practiceReferenceSnapshotId,
   shouldOpenLessonWorkspace,
   shouldPauseForPracticeStep,
+  watchedPracticeSeekTarget,
   VIDEO_CODE_ALONG_CODE_PANE_CLASS_NAME,
   VIDEO_CODE_ALONG_GRID_CLASS_NAME,
   VIDEO_CODE_ALONG_VIDEO_PANE_CLASS_NAME,
@@ -279,12 +283,19 @@ function VideoLessonView({
   const [completedPracticeStepId, setCompletedPracticeStepId] = useState<string | null>(null);
   const [skippedPracticeStepId, setSkippedPracticeStepId] = useState<string | null>(null);
   const [practiceCheckError, setPracticeCheckError] = useState<string | null>(null);
+  const [practiceFeedback, setPracticeFeedback] = useState<PracticeStepCompletion['verification'] | null>(null);
+  const [practiceSubmission, setPracticeSubmission] = useState<{ readonly stepId: string; readonly submissionId: string } | null>(null);
   const [compareSignal, setCompareSignal] = useState(0);
   const [layoutMode, setLayoutMode] = useState<VideoCodeAlongLayoutMode>('SPLIT');
   const [splitRatio, setSplitRatio] = useState(DEFAULT_VIDEO_SPLIT_RATIO);
   const [isResizingSplit, setIsResizingSplit] = useState(false);
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const hasAttemptedWorkspaceRef = useRef(false);
+
+  const clearPracticeFeedback = useCallback(() => {
+    setPracticeCheckError(null);
+    setPracticeFeedback(null);
+  }, []);
 
   const video = useQuery({
     queryKey: queryKeys.learning.video(lesson.id),
@@ -356,15 +367,19 @@ function VideoLessonView({
   });
 
   const completePracticeStep = useMutation({
-    mutationFn: (step: VideoPracticeStep) =>
-      requestJson<PracticeStepCompletion>(`/learning/practice-steps/${step.id}/complete`, {
+    mutationFn: async (input: { readonly step: VideoPracticeStep; readonly submissionId?: string }) => {
+      const response = await requestJson<unknown>(`/learning/practice-steps/${input.step.id}/complete`, {
         method: 'POST',
-        body: JSON.stringify({ workspaceId }),
-      }),
+        body: JSON.stringify({ workspaceId, submissionId: input.submissionId }),
+      });
+      return normalizePracticeStepCompletionResponse(response);
+    },
     onMutate: () => {
       setPracticeCheckError(null);
+      setPracticeFeedback(null);
     },
-    onSuccess: (data, step) => {
+    onSuccess: (data, input) => {
+      setPracticeFeedback(data.verification);
       if (data.verification.status !== 'PASSED') {
         const details = data.verification.details.join(' ');
         setPracticeCheckError(data.verification.status === 'FAILED'
@@ -374,8 +389,9 @@ function VideoLessonView({
       }
 
       toast.success('Practice step completed');
-      setCompletedPracticeStepId(step.id);
+      setCompletedPracticeStepId(input.step.id);
       setSkippedPracticeStepId(null);
+      setPracticeSubmission(null);
       setPracticeCheckError(null);
       void queryClient.invalidateQueries({ queryKey: queryKeys.learning.practiceSteps(lesson.id) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.learning.video(lesson.id) });
@@ -384,15 +400,45 @@ function VideoLessonView({
     onError: (error) => {
       if (error instanceof ApiError && error.code === 'COMPARE_UNAVAILABLE') {
         setPracticeCheckError('Unable to compare this step right now.');
+        setPracticeFeedback(null);
         return;
       }
 
       if (error instanceof ApiError && error.code === 'COMPARE_MISMATCH') {
         setPracticeCheckError('Your code does not match this step yet.');
+        setPracticeFeedback(null);
         return;
       }
 
       setPracticeCheckError(error instanceof Error ? error.message : 'Unable to check this step right now.');
+      setPracticeFeedback(null);
+    },
+  });
+
+  const submitPracticeJudge = useMutation({
+    mutationFn: async (step: VideoPracticeStep) => {
+      if (!workspaceId) {
+        throw new Error('Workspace is not ready');
+      }
+
+      await savePracticeWorkspaceRef.current?.();
+      return requestJson<{ readonly id: string; readonly status: JudgeSubmissionDetail['status'] }>(
+        `/learning/practice-steps/${step.id}/submissions`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ workspaceId }),
+        },
+      );
+    },
+    onMutate: () => {
+      setPracticeCheckError(null);
+      setPracticeFeedback(null);
+    },
+    onSuccess: (data, step) => {
+      setPracticeSubmission({ stepId: step.id, submissionId: data.id });
+    },
+    onError: (error) => {
+      setPracticeCheckError(error instanceof Error ? error.message : 'Unable to submit this practice step.');
     },
   });
 
@@ -405,7 +451,7 @@ function VideoLessonView({
       toast.info('Practice step skipped');
       setSkippedPracticeStepId(step.id);
       setCompletedPracticeStepId(step.id);
-      setPracticeCheckError(null);
+      clearPracticeFeedback();
       void queryClient.invalidateQueries({ queryKey: queryKeys.learning.practiceSteps(lesson.id) });
     },
     onError: (error) => {
@@ -455,7 +501,8 @@ function VideoLessonView({
     setActivePracticeStep(null);
     setCompletedPracticeStepId(null);
     setSkippedPracticeStepId(null);
-    setPracticeCheckError(null);
+    clearPracticeFeedback();
+    setPracticeSubmission(null);
     setSecondaryPanel(null);
   }, [lesson.id]);
 
@@ -477,9 +524,9 @@ function VideoLessonView({
 
     if (mode === 'FOLLOW') {
       setActivePracticeStep(null);
-      setPracticeCheckError(null);
+      clearPracticeFeedback();
     }
-  }, [lesson.id]);
+  }, [clearPracticeFeedback, lesson.id]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -512,7 +559,7 @@ function VideoLessonView({
 
       const nextRatio = ((event.clientX - rect.left) / rect.width) * 100;
       setSplitRatio(parseStoredVideoSplitRatio(String(nextRatio)));
-      setLayoutMode('SPLIT');
+      setLayoutMode('CUSTOM');
     }
 
     function handlePointerUp() {
@@ -610,6 +657,38 @@ function VideoLessonView({
     },
   });
 
+  const practiceSubmissionQuery = useQuery({
+    queryKey: queryKeys.judge.submission(practiceSubmission?.submissionId),
+    enabled: Boolean(practiceSubmission?.submissionId),
+    queryFn: async () => {
+      const response = await requestJson<{ readonly submission: JudgeSubmissionDetail }>(
+        `/submissions/${practiceSubmission?.submissionId}`,
+      );
+      return response.submission;
+    },
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === 'QUEUED' || status === 'RUNNING' ? 1000 : false;
+    },
+  });
+
+  useEffect(() => {
+    const submission = practiceSubmissionQuery.data;
+    if (!submission || !practiceSubmission || !activePracticeStep || activePracticeStep.id !== practiceSubmission.stepId) {
+      return;
+    }
+
+    if (submission.status === 'QUEUED' || submission.status === 'RUNNING') {
+      return;
+    }
+
+    setPracticeSubmission(null);
+    completePracticeStep.mutate({
+      step: activePracticeStep,
+      submissionId: submission.id,
+    });
+  }, [activePracticeStep, completePracticeStep.mutate, practiceSubmission, practiceSubmissionQuery.data]);
+
   const handleProgress = useCallback(
     (positionSeconds: number) => {
       if (!video.data?.videoAssetId || positionSeconds < 0) return;
@@ -623,30 +702,51 @@ function VideoLessonView({
     setActivePracticeStep(step);
     setCompletedPracticeStepId(null);
     setSkippedPracticeStepId(null);
-    setPracticeCheckError(null);
+    clearPracticeFeedback();
     setSecondaryPanel(null);
     setRequestedSeekSecond(step.timestampSeconds);
     setTimeout(() => setRequestedSeekSecond(null), 100);
     setPracticePauseSignal((value) => value + 1);
     setMobileMode('code');
-  }, []);
+  }, [clearPracticeFeedback]);
+
+  useEffect(() => {
+    if (learningMode !== 'PRACTICE' || activePracticeStep || actionablePracticeSteps.length === 0) {
+      return;
+    }
+
+    const step = findEarliestIncompletePracticeStepAtOrBefore(
+      Math.floor(currentSecond * 1000),
+      actionablePracticeSteps,
+    );
+
+    if (step) {
+      activatePracticeStep(step);
+    }
+  }, [actionablePracticeSteps, activatePracticeStep, activePracticeStep, currentSecond, learningMode]);
 
   const handlePracticeSeekRequest = useCallback((input: { readonly currentSeconds: number; readonly requestedSeconds: number }) => {
+    const requestedSeconds = watchedPracticeSeekTarget({
+      mode: learningMode,
+      requestedSeconds: input.requestedSeconds,
+      furthestWatchedSeconds: video.data?.progress.furthestPositionSeconds ?? input.currentSeconds,
+    });
+
     if (
-      input.requestedSeconds < input.currentSeconds
+      requestedSeconds < input.currentSeconds
       && activePracticeStep
       && !activePracticeStepCompleted
-      && input.requestedSeconds < activePracticeStep.timestampSeconds
+      && requestedSeconds < activePracticeStep.timestampSeconds
     ) {
       triggeredPracticeIdsRef.current.delete(activePracticeStep.id);
       setActivePracticeStep(null);
-      setPracticeCheckError(null);
+      clearPracticeFeedback();
     }
 
     if (
       activePracticeStep
       && !activePracticeStepCompleted
-      && input.requestedSeconds > activePracticeStep.timestampSeconds
+      && requestedSeconds > activePracticeStep.timestampSeconds
     ) {
       return activePracticeStep.timestampSeconds;
     }
@@ -654,28 +754,32 @@ function VideoLessonView({
     const step = findBlockingPracticeSeekStep(
       learningMode,
       Math.floor(input.currentSeconds * 1000),
-      Math.floor(input.requestedSeconds * 1000),
+      Math.floor(requestedSeconds * 1000),
       actionablePracticeSteps,
     );
 
     if (!step) {
-      return input.requestedSeconds;
+      return requestedSeconds;
     }
 
     activatePracticeStep(step);
     return step.timestampSeconds;
-  }, [activatePracticeStep, actionablePracticeSteps, activePracticeStep, activePracticeStepCompleted, learningMode]);
+  }, [activatePracticeStep, actionablePracticeSteps, activePracticeStep, activePracticeStepCompleted, clearPracticeFeedback, learningMode, video.data?.progress.furthestPositionSeconds]);
 
   const handlePracticeCheck = useCallback(async (step: VideoPracticeStep) => {
-    setPracticeCheckError(null);
+    clearPracticeFeedback();
 
     try {
+      if (step.verificationMode === 'TESTS') {
+        submitPracticeJudge.mutate(step);
+        return;
+      }
       await savePracticeWorkspaceRef.current?.();
-      completePracticeStep.mutate(step);
+      completePracticeStep.mutate({ step });
     } catch {
       setPracticeCheckError('Unable to compare this step right now.');
     }
-  }, [completePracticeStep.mutate]);
+  }, [clearPracticeFeedback, completePracticeStep.mutate, submitPracticeJudge.mutate]);
 
   const handleTimeChange = useCallback((positionSeconds: number) => {
     const nextSecond = Math.floor(positionSeconds);
@@ -723,6 +827,25 @@ function VideoLessonView({
     ? (practiceSteps.data?.practiceSteps.findIndex((step) => step.id === activePracticeStep.id) ?? -1)
     : -1;
   const splitColumns = codeAlongSplitColumns(layoutMode, splitRatio);
+  const layoutModeLabel = layoutMode === 'CUSTOM'
+    ? `Custom ${splitRatio}/${100 - splitRatio}`
+    : layoutMode === 'SPLIT'
+      ? 'Split'
+      : layoutMode === 'FOCUS_VIDEO'
+        ? 'Focus Video'
+        : 'Focus Code';
+  const isPracticeCheckPending = completePracticeStep.isPending
+    || submitPracticeJudge.isPending
+    || practiceSubmissionQuery.isFetching
+    || Boolean(practiceSubmission);
+  const canVerifyActivePracticeStep = activePracticeStep
+    ? activePracticeStep.verificationMode === 'TESTS'
+      ? workspaceCapabilities.allowJudge
+      : workspaceCapabilities.allowCheck
+    : false;
+  const effectiveWorkspaceCapabilities = activePracticeStep
+    ? { ...workspaceCapabilities, allowJudge: false }
+    : workspaceCapabilities;
 
   return (
     <div className="mx-auto flex w-full max-w-[1800px] flex-col gap-3">
@@ -749,13 +872,14 @@ function VideoLessonView({
             <details className="relative">
               <summary className="inline-flex h-8 cursor-pointer list-none items-center gap-1.5 rounded-md border border-border/70 bg-card px-3 text-xs font-semibold text-foreground shadow-2xs hover:bg-muted">
                 <Columns className="h-3.5 w-3.5" />
-                <span>{layoutMode === 'SPLIT' ? 'Split' : layoutMode === 'FOCUS_VIDEO' ? 'Focus Video' : 'Focus Code'}</span>
+                <span>{layoutModeLabel}</span>
               </summary>
-              <div className="absolute right-0 z-30 mt-2 min-w-40 rounded-lg border border-border bg-card p-1.5 text-xs shadow-lg">
+              <div className="absolute right-0 z-30 mt-2 min-w-44 rounded-lg border border-border bg-card p-1.5 text-xs shadow-lg">
                 {([
                   ['SPLIT', 'Split'],
                   ['FOCUS_VIDEO', 'Focus Video'],
                   ['FOCUS_CODE', 'Focus Code'],
+                  ['CUSTOM', `Custom ${splitRatio}/${100 - splitRatio}`],
                 ] as const).map(([mode, label]) => (
                   <button
                     key={mode}
@@ -973,10 +1097,10 @@ function VideoLessonView({
                       >
                         Continue Video
                       </Button>
-                    ) : workspaceCapabilities.allowCheck ? (
+                    ) : canVerifyActivePracticeStep ? (
                       <Button
                         size="sm"
-                        isLoading={completePracticeStep.isPending}
+                        isLoading={isPracticeCheckPending}
                         onClick={() => void handlePracticeCheck(activePracticeStep)}
                       >
                         {activePracticeStep.verificationMode === 'TESTS' ? 'Submit' : 'Check'}
@@ -1014,12 +1138,26 @@ function VideoLessonView({
           <button
             type="button"
             aria-label="Resize video and code panes"
+            aria-valuemin={30}
+            aria-valuemax={60}
+            aria-valuenow={splitRatio}
+            title="Drag to resize video and code panes"
             onPointerDown={(event) => {
               event.preventDefault();
               setIsResizingSplit(true);
-              setLayoutMode('SPLIT');
+              setLayoutMode('CUSTOM');
             }}
-            className={`hidden cursor-col-resize touch-none bg-border/70 transition-colors hover:bg-primary/50 xl:block ${isResizingSplit ? 'bg-primary/60' : ''}`}
+            onKeyDown={(event) => {
+              if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') {
+                return;
+              }
+
+              event.preventDefault();
+              const delta = event.key === 'ArrowLeft' ? -2 : 2;
+              setSplitRatio((value) => parseStoredVideoSplitRatio(String(value + delta)));
+              setLayoutMode('CUSTOM');
+            }}
+            className={`hidden h-full min-h-[420px] self-stretch cursor-col-resize touch-none rounded-full border-x border-transparent bg-transparent transition-colors hover:border-primary/25 hover:bg-primary/35 focus:outline-none focus:ring-2 focus:ring-primary/50 xl:block ${isResizingSplit ? 'border-primary/40 bg-primary/45' : ''}`}
           />
         ) : null}
 
@@ -1064,10 +1202,10 @@ function VideoLessonView({
                       >
                         Continue Video
                       </Button>
-                    ) : workspaceCapabilities.allowCheck ? (
+                    ) : canVerifyActivePracticeStep ? (
                       <Button
                         size="sm"
-                        isLoading={completePracticeStep.isPending}
+                        isLoading={isPracticeCheckPending}
                         onClick={() => void handlePracticeCheck(activePracticeStep)}
                         leftIcon={<ClipboardCheck className="h-3.5 w-3.5" />}
                       >
@@ -1087,6 +1225,41 @@ function VideoLessonView({
                     ) : null}
                   </div>
                 </div>
+                {practiceFeedback ? (
+                  <div className="mt-3 rounded-md border border-border bg-background/80 p-3 text-xs">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone={practiceFeedback.status === 'PASSED' ? 'success' : practiceFeedback.status === 'FAILED' ? 'warning' : 'neutral'}>
+                        {practiceFeedback.verificationMode === 'AI_SEMANTIC' ? 'AI Check' : practiceFeedback.verificationMode}
+                      </Badge>
+                      <span className="font-semibold text-foreground">
+                        {practiceFeedback.status === 'PASSED'
+                          ? 'Looks complete'
+                          : practiceFeedback.status === 'FAILED'
+                            ? 'Needs changes'
+                            : 'Could not verify'}
+                      </span>
+                      {practiceFeedback.cached ? <span className="text-muted-foreground">Cached</span> : null}
+                    </div>
+                    {practiceFeedback.summary ? (
+                      <p className="mt-2 leading-5 text-foreground">{practiceFeedback.summary}</p>
+                    ) : null}
+                    {practiceFeedback.guidance ? (
+                      <p className="mt-1 leading-5 text-muted-foreground">{practiceFeedback.guidance}</p>
+                    ) : null}
+                    {practiceFeedback.requirements && practiceFeedback.requirements.length > 0 ? (
+                      <ul className="mt-2 space-y-1">
+                        {practiceFeedback.requirements.map((requirement) => (
+                          <li key={`${requirement.label}-${requirement.feedback}`} className="flex gap-2 text-muted-foreground">
+                            <span className={requirement.status === 'PASS' ? 'text-emerald-600 dark:text-emerald-300' : requirement.status === 'NEEDS_FIX' ? 'text-amber-600 dark:text-amber-300' : 'text-muted-foreground'}>
+                              {requirement.status === 'PASS' ? 'OK' : requirement.status === 'NEEDS_FIX' ? 'Fix' : 'Check'}
+                            </span>
+                            <span><span className="font-medium text-foreground">{requirement.label}:</span> {requirement.feedback}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ) : null}
             {workspaceId ? (
@@ -1100,7 +1273,7 @@ function VideoLessonView({
                 onRegisterSave={(save) => {
                   savePracticeWorkspaceRef.current = save;
                 }}
-                capabilities={workspaceCapabilities}
+                capabilities={effectiveWorkspaceCapabilities}
                 workspaceType={codeAlong.data?.workspaceType ?? 'SINGLE_FILE'}
               />
             ) : workspaceError ? (

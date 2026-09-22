@@ -42,9 +42,12 @@ export function createInstructorPracticeRouter(controller: PracticeController, t
   router.post('/practice/problems', ...instructorOnly, asyncHandler(controller.createProblem));
   router.get('/practice/problems/:problemId', ...instructorOnly, asyncHandler(controller.getInstructorProblem));
   router.patch('/practice/problems/:problemId', ...instructorOnly, asyncHandler(controller.updateProblem));
+  router.delete('/practice/problems/:problemId', ...instructorOnly, asyncHandler(controller.deleteProblem));
+  router.post('/practice/problems/:problemId/validate', ...instructorOnly, asyncHandler(controller.validateProblem));
   router.post('/practice/problems/:problemId/publish', ...instructorOnly, asyncHandler(controller.publishProblem));
   router.post('/practice/problems/:problemId/archive', ...instructorOnly, asyncHandler(controller.archiveProblem));
   router.post('/practice/problems/:problemId/test-cases', ...instructorOnly, asyncHandler(controller.createTestCase));
+  router.post('/practice/problems/:problemId/test-cases/import', ...instructorOnly, asyncHandler(controller.importTestCases));
   router.post('/practice/problems/:problemId/test-cases/reorder', ...instructorOnly, asyncHandler(controller.reorderTestCases));
   router.patch('/practice/test-cases/:testCaseId', ...instructorOnly, asyncHandler(controller.updateTestCase));
   router.delete('/practice/test-cases/:testCaseId', ...instructorOnly, asyncHandler(controller.deleteTestCase));

@@ -12,6 +12,9 @@ export function createInstructorQuizRouter(controller: QuizController, tokenServ
   router.get('/lessons/:lessonId/quiz', ...instructorOnly, asyncHandler(controller.getInstructorQuiz));
   router.put('/lessons/:lessonId/quiz', ...instructorOnly, asyncHandler(controller.upsertInstructorQuiz));
   router.post('/quizzes/:quizId/questions', ...instructorOnly, asyncHandler(controller.createQuestion));
+  router.post('/quizzes/:quizId/questions/import-preview', ...instructorOnly, asyncHandler(controller.previewQuestionImport));
+  router.post('/quizzes/:quizId/questions/import', ...instructorOnly, asyncHandler(controller.importQuestions));
+  router.get('/quizzes/:quizId/questions/export', ...instructorOnly, asyncHandler(controller.exportQuestions));
   router.post('/quizzes/:quizId/questions/reorder', ...instructorOnly, asyncHandler(controller.reorderQuestions));
   router.patch('/quizzes/:quizId/questions/:questionId', ...instructorOnly, asyncHandler(controller.updateQuestion));
   router.delete('/quizzes/:quizId/questions/:questionId', ...instructorOnly, asyncHandler(controller.deleteQuestion));

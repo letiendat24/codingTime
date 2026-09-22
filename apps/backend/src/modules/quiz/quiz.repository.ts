@@ -58,6 +58,10 @@ export class QuizRepository {
     });
   }
 
+  async countAttempts(quizId: string) {
+    return this.prisma.quizAttempt.count({ where: { quizId } });
+  }
+
   async findQuestionForInstructor(instructorId: string, quizId: string, questionId: string) {
     return this.prisma.quizQuestion.findFirst({
       where: {
@@ -123,6 +127,63 @@ export class QuizRepository {
         },
       },
       include: { options: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] } },
+    });
+  }
+
+  async createQuestions(input: {
+    readonly quizId: string;
+    readonly startPosition: number;
+    readonly questions: readonly {
+      readonly type: Prisma.QuizQuestionCreateInput['type'];
+      readonly prompt: string;
+      readonly explanation: string | null;
+      readonly points: Prisma.Decimal;
+      readonly position: number;
+      readonly options: readonly {
+        readonly text: string;
+        readonly isCorrect: boolean;
+        readonly position: number;
+      }[];
+    }[];
+  }) {
+    for (const [index, question] of input.questions.entries()) {
+      await this.createQuestion({
+        quizId: input.quizId,
+        type: question.type,
+        prompt: question.prompt,
+        explanation: question.explanation,
+        points: question.points,
+        position: input.startPosition + index,
+        options: question.options,
+      });
+    }
+
+    return this.prisma.quiz.findUniqueOrThrow({
+      where: { id: input.quizId },
+      include: quizInclude,
+    });
+  }
+
+  async replaceQuestions(input: {
+    readonly quizId: string;
+    readonly questions: readonly {
+      readonly type: Prisma.QuizQuestionCreateInput['type'];
+      readonly prompt: string;
+      readonly explanation: string | null;
+      readonly points: Prisma.Decimal;
+      readonly position: number;
+      readonly options: readonly {
+        readonly text: string;
+        readonly isCorrect: boolean;
+        readonly position: number;
+      }[];
+    }[];
+  }) {
+    await this.prisma.quizQuestion.deleteMany({ where: { quizId: input.quizId } });
+    return this.createQuestions({
+      quizId: input.quizId,
+      startPosition: 1,
+      questions: input.questions,
     });
   }
 

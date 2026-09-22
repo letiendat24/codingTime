@@ -122,6 +122,7 @@ enum CheckpointProgressStatus {
 
 enum VideoPracticeVerificationMode {
   NONE
+  AI_SEMANTIC
   CODE_COMPARE
   FILE_COMPARE
   STRUCTURAL
@@ -446,6 +447,8 @@ model VideoCodeAlongConfig {
   allowRun Boolean @default(true)
   allowCheck Boolean @default(true)
   allowJudge Boolean @default(true)
+  defaultPracticeBehavior VideoPracticeBehavior @default(REQUIRED)
+  defaultVerificationStrategy String @default("AUTO")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -769,6 +772,7 @@ model VideoCheckpoint {
   required         Boolean             @default(false)
   pauseVideo       Boolean             @default(true)
   practiceEnabled  Boolean             @default(false)
+  practiceConfigMode String             @default("AUTO")
   practiceVerificationMode VideoPracticeVerificationMode @default(NONE)
   practiceBehavior VideoPracticeBehavior @default(GUIDED)
   practiceSnapshotId String?            @db.Uuid
@@ -830,6 +834,36 @@ model CheckpointProgress {
   @@unique([studentId, checkpointId])
   @@index([checkpointId])
   @@map("checkpoint_progress")
+}
+
+model VideoPracticeVerificationAttempt {
+  id                    String   @id @default(uuid()) @db.Uuid
+  studentId             String   @db.Uuid
+  lessonId              String   @db.Uuid
+  checkpointId          String   @db.Uuid
+  workspaceId           String?  @db.Uuid
+  currentSnapshotId     String?  @db.Uuid
+  previousSnapshotId    String?  @db.Uuid
+  evaluatorType         String
+  evaluatorModel        String?
+  evaluatorVersion      String
+  inputFingerprint      String
+  instructorFingerprint String
+  status                String
+  feedback              String
+  guidance              String?
+  requirementsJson      Json?
+  cachedFromAttemptId   String?  @db.Uuid
+  providerErrorCode     String?
+  startedAt             DateTime @default(now())
+  completedAt           DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([studentId, checkpointId, inputFingerprint])
+  @@index([lessonId, checkpointId, createdAt])
+  @@index([workspaceId])
+  @@map("video_practice_verification_attempts")
 }
 
 model CodeSnapshot {
@@ -1018,11 +1052,22 @@ model PracticeProblem {
   title            String
   slug             String                @unique
   description      String
+  inputFormat      String                @default("")
+  outputFormat     String                @default("")
+  constraints      String                @default("")
+  examplesJson     Json?
+  explanation      String?
   difficulty       PracticeDifficulty
   status           PracticeProblemStatus @default(DRAFT)
   language         String                @default("javascript")
   entryFile        String                @default("index.js")
   starterFilesJson Json
+  referenceFilesJson Json?
+  executionContract String               @default("FUNCTION")
+  comparisonPolicy String                @default("NORMALIZED_TEXT")
+  validationFingerprint String?
+  validatedAt      DateTime?
+  validationSummaryJson Json?
   timeLimitMs      Int                   @default(5000)
   memoryLimitMb    Int                   @default(128)
   passScore        Decimal               @default(70) @db.Decimal(5, 2)

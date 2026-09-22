@@ -45,6 +45,14 @@ export class PracticeRepository {
     return this.prisma.practiceProblem.update({ where: { id: problemId }, data, include: practiceProblemInclude });
   }
 
+  async deleteProblem(problemId: string) {
+    await this.prisma.practiceProblem.delete({ where: { id: problemId } });
+  }
+
+  async countProblemSubmissions(problemId: string) {
+    return this.prisma.judgeSubmission.count({ where: { practiceProblemId: problemId } });
+  }
+
   async listInstructorProblems(instructorId: string, query: InstructorPracticeListQuery) {
     const where: Prisma.PracticeProblemWhereInput = {
       createdByUserId: instructorId,
@@ -142,6 +150,10 @@ export class PracticeRepository {
 
   async createTestCase(problemId: string, data: Omit<Prisma.PracticeProblemTestCaseUncheckedCreateInput, 'practiceProblemId'>) {
     return this.prisma.practiceProblemTestCase.create({ data: { ...data, practiceProblemId: problemId } });
+  }
+
+  async deleteTestCases(problemId: string) {
+    await this.prisma.practiceProblemTestCase.deleteMany({ where: { practiceProblemId: problemId } });
   }
 
   async findTestCaseForInstructor(instructorId: string, testCaseId: string) {

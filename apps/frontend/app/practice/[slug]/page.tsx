@@ -30,6 +30,16 @@ interface WorkspaceResponse {
   readonly workspace: Workspace;
 }
 
+function normalizeOutput(value: string) {
+  const trimmed = value.trim();
+
+  try {
+    return JSON.stringify(JSON.parse(trimmed));
+  } catch {
+    return trimmed.replace(/\r\n/g, '\n');
+  }
+}
+
 export default function PracticeProblemPage() {
   const params = useParams<{ slug: string }>();
   const queryClient = useQueryClient();
@@ -43,12 +53,28 @@ export default function PracticeProblemPage() {
   const [executionId, setExecutionId] = useState<string | null>(null);
   const [submissionId, setSubmissionId] = useState<string | null>(null);
   const [activeConsoleTab, setActiveConsoleTab] = useState<'output' | 'judge'>('output');
+  const [selectedPublicTestId, setSelectedPublicTestId] = useState<string | null>(null);
+  const [lastRunPublicTestId, setLastRunPublicTestId] = useState<string | null>(null);
 
   const detail = useQuery({
     queryKey: queryKeys.practice.detail(params.slug),
     queryFn: () => requestJson<ProblemResponse>(`/practice/problems/${params.slug}`),
   });
   const problem = detail.data?.problem;
+  const selectedPublicTest = useMemo(() => {
+    if (!problem) {
+      return null;
+    }
+
+    return problem.publicTests.find((test) => test.id === selectedPublicTestId) ?? problem.publicTests[0] ?? null;
+  }, [problem, selectedPublicTestId]);
+  const lastRunPublicTest = useMemo(() => {
+    if (!problem || !lastRunPublicTestId) {
+      return null;
+    }
+
+    return problem.publicTests.find((test) => test.id === lastRunPublicTestId) ?? null;
+  }, [problem, lastRunPublicTestId]);
 
   const openWorkspace = useMutation({
     mutationFn: () =>
@@ -85,11 +111,18 @@ export default function PracticeProblemPage() {
 
   const execution = useQuery({
     queryKey: queryKeys.execution.detail(executionId),
-    queryFn: () => requestJson<ExecutionDetail>(`/executions/${executionId}`),
+    queryFn: async () => {
+      const response = await requestJson<{ readonly execution: ExecutionDetail }>(`/executions/${executionId}`);
+      return response.execution;
+    },
     enabled: Boolean(executionId),
     refetchInterval: (query) =>
       query.state.data?.status === 'QUEUED' || query.state.data?.status === 'RUNNING' ? 1000 : false,
   });
+  const executionIsActive = execution.data?.status === 'QUEUED' || execution.data?.status === 'RUNNING';
+  const runSamplePassed = execution.data?.status === 'SUCCEEDED' && lastRunPublicTest && execution.data.result
+    ? normalizeOutput(execution.data.result.stdout) === normalizeOutput(lastRunPublicTest.expectedOutput)
+    : null;
 
   const submission = useQuery({
     queryKey: queryKeys.judge.submission(submissionId),
@@ -115,10 +148,14 @@ export default function PracticeProblemPage() {
       setActiveConsoleTab('output');
       return requestJson<{ readonly id: string; readonly status: string }>(
         `/workspaces/${workspace!.id}/executions`,
-        { method: 'POST' },
+        {
+          method: 'POST',
+          body: JSON.stringify(selectedPublicTest ? { publicTestCaseId: selectedPublicTest.id } : {}),
+        },
       );
     },
     onSuccess: (data) => {
+      setLastRunPublicTestId(selectedPublicTest?.id ?? null);
       setExecutionId(data.id);
       setMobileTab('result');
     },
@@ -203,7 +240,8 @@ export default function PracticeProblemPage() {
             <Button
               size="sm"
               variant="secondary"
-              isLoading={run.isPending || execution.data?.status === 'RUNNING'}
+              disabled={run.isPending || executionIsActive || !selectedPublicTest}
+              isLoading={run.isPending || executionIsActive}
               onClick={() => run.mutate()}
             >
               <Play className="h-3.5 w-3.5 mr-1 text-emerald-500" />
@@ -280,12 +318,55 @@ export default function PracticeProblemPage() {
                   {problem.description}
                 </div>
 
+                <div className="grid gap-3 border-t border-border pt-4 text-sm">
+                  <div>
+                    <h3 className="mb-1 text-sm font-semibold text-foreground">Input Format</h3>
+                    <p className="whitespace-pre-wrap text-muted-foreground">{problem.inputFormat}</p>
+                  </div>
+                  <div>
+                    <h3 className="mb-1 text-sm font-semibold text-foreground">Output Format</h3>
+                    <p className="whitespace-pre-wrap text-muted-foreground">{problem.outputFormat}</p>
+                  </div>
+                  <div>
+                    <h3 className="mb-1 text-sm font-semibold text-foreground">Constraints</h3>
+                    <p className="whitespace-pre-wrap text-muted-foreground">{problem.constraints}</p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                    Contract: export <span className="font-mono text-foreground">solution(input)</span> from{' '}
+                    <span className="font-mono text-foreground">{problem.entryFile}</span>. Return the answer directly; CodeSync handles execution I/O.
+                  </div>
+                </div>
+
+                {problem.examples.length > 0 ? (
+                  <div className="space-y-3 border-t border-border pt-4">
+                    <h3 className="text-sm font-semibold text-foreground">Examples</h3>
+                    {problem.examples.map((example, index) => (
+                      <div key={`${example.input}-${index}`} className="rounded-lg border border-border bg-muted/40 p-3 text-xs">
+                        <div className="font-medium text-muted-foreground">Example {index + 1}</div>
+                        <pre className="mt-2 overflow-auto rounded bg-card p-2 font-mono text-foreground">{example.input}</pre>
+                        <pre className="mt-2 overflow-auto rounded bg-card p-2 font-mono text-foreground">{example.output}</pre>
+                        {example.explanation ? <p className="mt-2 text-muted-foreground">{example.explanation}</p> : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+
                 {/* Public Tests */}
                 <div className="space-y-3 pt-4 border-t border-border">
                   <h3 className="text-sm font-semibold text-foreground">{t('practice.publicTests')}</h3>
                   <div className="space-y-3">
                     {problem.publicTests.map((test, index) => (
-                      <div key={test.id} className="rounded-lg border border-border bg-muted/40 p-3.5 space-y-2 text-xs font-mono">
+                      <button
+                        key={test.id}
+                        type="button"
+                        onClick={() => setSelectedPublicTestId(test.id)}
+                        className={`w-full rounded-lg border p-3.5 text-left text-xs font-mono transition-colors ${
+                          selectedPublicTest?.id === test.id
+                            ? 'border-primary bg-primary/5 ring-1 ring-primary/40'
+                            : 'border-border bg-muted/40 hover:border-primary/50'
+                        }`}
+                      >
+                        <div className="space-y-2">
                         <div className="flex items-center justify-between text-muted-foreground font-sans text-[11px] font-semibold">
                           <span>{test.name || `Sample Case #${index + 1}`}</span>
                           <span>Weight: {test.weight}</span>
@@ -302,7 +383,8 @@ export default function PracticeProblemPage() {
                             {test.expectedOutput}
                           </pre>
                         </div>
-                      </div>
+                        </div>
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -432,6 +514,41 @@ export default function PracticeProblemPage() {
 
                     {execution.data?.result ? (
                       <div className="space-y-2 pt-1">
+                        {lastRunPublicTest ? (
+                          <div className="rounded border border-border bg-muted/30 p-2.5 font-sans text-xs">
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              <span className="font-semibold text-foreground">
+                                {lastRunPublicTest.name || 'Selected sample'}
+                              </span>
+                              {runSamplePassed === null ? null : (
+                                <Badge tone={runSamplePassed ? 'success' : 'danger'}>
+                                  {runSamplePassed ? 'PASSED' : 'FAILED'}
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="grid gap-2 font-mono">
+                              <div>
+                                <span className="font-sans text-[11px] text-muted-foreground">Input</span>
+                                <pre className="mt-1 overflow-auto rounded bg-card p-2 text-foreground whitespace-pre-wrap">
+                                  {lastRunPublicTest.input}
+                                </pre>
+                              </div>
+                              <div>
+                                <span className="font-sans text-[11px] text-muted-foreground">Expected Output</span>
+                                <pre className="mt-1 overflow-auto rounded bg-card p-2 text-foreground whitespace-pre-wrap">
+                                  {lastRunPublicTest.expectedOutput}
+                                </pre>
+                              </div>
+                              <div>
+                                <span className="font-sans text-[11px] text-muted-foreground">Actual Output</span>
+                                <pre className="mt-1 overflow-auto rounded bg-card p-2 text-foreground whitespace-pre-wrap">
+                                  {execution.data.result.stdout || '(empty)'}
+                                </pre>
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
+
                         {execution.data.result.stdout ? (
                           <pre className="rounded bg-muted/60 p-2.5 text-foreground overflow-auto whitespace-pre-wrap">
                             {execution.data.result.stdout}
@@ -452,7 +569,9 @@ export default function PracticeProblemPage() {
                       </div>
                     ) : (
                       <p className="text-muted-foreground py-6 text-center font-sans text-xs">
-                        Click &quot;Run&quot; to test your solution with sample test cases.
+                        {executionIsActive
+                          ? 'Running your code in the isolated sandbox...'
+                          : 'Click "Run" to test your solution with sample test cases.'}
                       </p>
                     )}
                   </div>

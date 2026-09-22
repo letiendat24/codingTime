@@ -2,11 +2,12 @@ import {
   CheckpointProgressStatus,
   CourseStatus,
   EnrollmentStatus,
-  JudgeSubmissionStatus,
   LearningActivityType,
   LessonType,
   VideoAssetStatus,
-  type Prisma,
+  VideoPracticeBehavior,
+  VideoPracticeVerificationMode,
+  Prisma,
   type PrismaClient,
 } from '@prisma/client';
 
@@ -129,6 +130,32 @@ export class VideoLearningRepository {
     });
   }
 
+  async findLessonWithWorkspaceDetails(lessonId: string) {
+    return this.prisma.lesson.findUnique({
+      where: { id: lessonId },
+      include: {
+        codeAlongConfig: true,
+        videoAsset: {
+          include: {
+            codeSnapshots: {
+              orderBy: [{ timestampSeconds: 'asc' }, { createdAt: 'asc' }],
+            },
+            checkpoints: {
+              include: {
+                codingConfig: {
+                  include: {
+                    testCases: true,
+                  },
+                },
+              },
+              orderBy: [{ timestampSeconds: 'asc' }, { position: 'asc' }, { createdAt: 'asc' }],
+            },
+          },
+        },
+      },
+    });
+  }
+
   async findCodeAlongLessonForStudent(studentId: string, lessonId: string) {
     return this.prisma.lesson.findFirst({
       where: {
@@ -154,6 +181,31 @@ export class VideoLearningRepository {
     });
   }
 
+  async findCodeAlongContextForStudent(studentId: string, lessonId: string) {
+    return this.prisma.lesson.findFirst({
+      where: {
+        id: lessonId,
+        lessonType: LessonType.VIDEO,
+        module: {
+          course: {
+            status: { in: [CourseStatus.PUBLISHED, CourseStatus.ARCHIVED] },
+            enrollments: { some: { studentId, status: { not: EnrollmentStatus.CANCELLED } } },
+          },
+        },
+      },
+      include: {
+        videoAsset: {
+          include: {
+            codeSnapshots: {
+              orderBy: [{ timestampSeconds: 'asc' }, { createdAt: 'asc' }],
+            },
+          },
+        },
+        codeAlongConfig: true,
+      },
+    });
+  }
+
   async upsertCodeAlongConfig(lessonId: string, data: Prisma.VideoCodeAlongConfigUncheckedCreateInput) {
     return this.prisma.videoCodeAlongConfig.upsert({
       where: { lessonId },
@@ -171,6 +223,8 @@ export class VideoLearningRepository {
         allowRun: data.allowRun ?? true,
         allowCheck: data.allowCheck ?? true,
         allowJudge: data.allowJudge ?? true,
+        ...(data.defaultPracticeBehavior !== undefined ? { defaultPracticeBehavior: data.defaultPracticeBehavior } : {}),
+        ...(data.defaultVerificationStrategy !== undefined ? { defaultVerificationStrategy: data.defaultVerificationStrategy } : {}),
       },
     });
   }
@@ -184,6 +238,25 @@ export class VideoLearningRepository {
             module: {
               course: { ownerInstructorId: instructorId },
             },
+          },
+        },
+      },
+      include: {
+        codingConfig: {
+          include: {
+            testCases: true,
+          },
+        },
+        videoAsset: {
+          include: {
+            codeSnapshots: {
+              orderBy: [{ timestampSeconds: 'asc' }, { createdAt: 'asc' }],
+            },
+          },
+        },
+        lesson: {
+          include: {
+            codeAlongConfig: true,
           },
         },
       },
@@ -202,12 +275,50 @@ export class VideoLearningRepository {
           },
         },
       },
+      include: {
+        codingConfig: {
+          include: {
+            testCases: true,
+          },
+        },
+        videoAsset: {
+          include: {
+            codeSnapshots: {
+              orderBy: [{ timestampSeconds: 'asc' }, { createdAt: 'asc' }],
+            },
+          },
+        },
+        lesson: {
+          include: {
+            codeAlongConfig: true,
+          },
+        },
+      },
       orderBy: [{ timestampSeconds: 'asc' }, { position: 'asc' }, { createdAt: 'asc' }],
     });
   }
 
   async createCheckpoint(input: Prisma.VideoCheckpointUncheckedCreateInput) {
     return this.prisma.videoCheckpoint.create({ data: input });
+  }
+
+  async findCheckpointAtMilestone(lessonId: string, videoAssetId: string, timestampSeconds: number) {
+    return this.prisma.videoCheckpoint.findFirst({
+      where: {
+        lessonId,
+        videoAssetId,
+        timestampSeconds,
+      },
+      orderBy: [{ createdAt: 'asc' }],
+    });
+  }
+
+  async findCheckpointForSnapshot(snapshotId: string) {
+    return this.prisma.videoCheckpoint.findFirst({
+      where: { practiceSnapshotId: snapshotId },
+      include: { _count: { select: { progress: true } } },
+      orderBy: [{ createdAt: 'asc' }],
+    });
   }
 
   async updateCheckpoint(checkpointId: string, data: Prisma.VideoCheckpointUpdateInput) {
@@ -263,6 +374,14 @@ export class VideoLearningRepository {
         },
       },
       include: {
+        videoAsset: {
+          include: {
+            codeSnapshots: {
+              select: { id: true, lessonId: true, videoAssetId: true },
+              orderBy: [{ timestampSeconds: 'asc' }, { createdAt: 'asc' }],
+            },
+          },
+        },
         progress: { where: { studentId }, take: 1 },
       },
       orderBy: [{ timestampSeconds: 'asc' }, { position: 'asc' }, { createdAt: 'asc' }],
@@ -287,7 +406,14 @@ export class VideoLearningRepository {
         },
       },
       include: {
-        videoAsset: true,
+        videoAsset: {
+          include: {
+            codeSnapshots: {
+              select: { id: true, lessonId: true, videoAssetId: true },
+              orderBy: [{ timestampSeconds: 'asc' }, { createdAt: 'asc' }],
+            },
+          },
+        },
         progress: { where: { studentId }, take: 1 },
       },
     });
@@ -300,21 +426,14 @@ export class VideoLearningRepository {
     });
   }
 
-  async findLatestCompletedJudgeSubmissionForWorkspace(studentId: string, workspaceId: string) {
+  async findJudgeSubmissionForPracticeStep(studentId: string, checkpointId: string, workspaceId: string, submissionId: string) {
     return this.prisma.judgeSubmission.findFirst({
       where: {
+        id: submissionId,
         userId: studentId,
+        checkpointId,
         workspaceId,
-        status: {
-          in: [
-            JudgeSubmissionStatus.ACCEPTED,
-            JudgeSubmissionStatus.REJECTED,
-            JudgeSubmissionStatus.FAILED,
-            JudgeSubmissionStatus.TIMED_OUT,
-          ],
-        },
       },
-      orderBy: { submittedAt: 'desc' },
       include: { result: true },
     });
   }
@@ -328,6 +447,31 @@ export class VideoLearningRepository {
         },
       },
     });
+  }
+
+  async findReusableAiVerificationAttempt(input: {
+    readonly studentId: string;
+    readonly checkpointId: string;
+    readonly workspaceId: string;
+    readonly inputFingerprint: string;
+    readonly evaluatorVersion: string;
+  }) {
+    return this.prisma.videoPracticeVerificationAttempt.findFirst({
+      where: {
+        studentId: input.studentId,
+        checkpointId: input.checkpointId,
+        workspaceId: input.workspaceId,
+        inputFingerprint: input.inputFingerprint,
+        evaluatorVersion: input.evaluatorVersion,
+        providerErrorCode: null,
+        status: { in: ['PASS', 'NEEDS_FIX', 'CANNOT_VERIFY'] },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async createAiVerificationAttempt(input: Prisma.VideoPracticeVerificationAttemptUncheckedCreateInput) {
+    return this.prisma.videoPracticeVerificationAttempt.create({ data: input });
   }
 
   async upsertCheckpointCompleted(input: {
@@ -456,6 +600,27 @@ export class VideoLearningRepository {
     });
   }
 
+  async listRequiredCheckpointsForCompletion(studentId: string, videoAssetId: string) {
+    return this.prisma.videoCheckpoint.findMany({
+      where: {
+        videoAssetId,
+        required: true,
+      },
+      include: {
+        videoAsset: {
+          include: {
+            codeSnapshots: {
+              select: { id: true, lessonId: true, videoAssetId: true },
+              orderBy: [{ timestampSeconds: 'asc' }, { createdAt: 'asc' }],
+            },
+          },
+        },
+        progress: { where: { studentId }, take: 1 },
+      },
+      orderBy: [{ timestampSeconds: 'asc' }, { position: 'asc' }, { createdAt: 'asc' }],
+    });
+  }
+
   async findActivity(input: {
     readonly userId: string;
     readonly type: LearningActivityType;
@@ -535,6 +700,35 @@ export class VideoLearningRepository {
 
   async deleteSnapshot(snapshotId: string) {
     await this.prisma.codeSnapshot.delete({ where: { id: snapshotId } });
+  }
+
+  async deleteOrDeactivateCheckpointForSnapshot(snapshotId: string) {
+    const checkpoint = await this.findCheckpointForSnapshot(snapshotId);
+
+    if (!checkpoint) {
+      return null;
+    }
+
+    if (checkpoint._count.progress === 0) {
+      await this.deleteCheckpoint(checkpoint.id);
+      return { checkpointId: checkpoint.id, action: 'deleted' as const };
+    }
+
+    await this.updateCheckpoint(checkpoint.id, {
+      required: false,
+      pauseVideo: false,
+      practiceEnabled: false,
+      practiceConfigMode: 'AUTO',
+      practiceVerificationMode: VideoPracticeVerificationMode.NONE,
+      practiceBehavior: VideoPracticeBehavior.GUIDED,
+      practiceSnapshotId: null,
+      practiceTargetFilePath: null,
+      practiceTargetStartLine: null,
+      practiceTargetEndLine: null,
+      practiceVerificationRulesJson: Prisma.DbNull,
+    });
+
+    return { checkpointId: checkpoint.id, action: 'deactivated' as const };
   }
 
   async findSnapshotForStudent(studentId: string, snapshotId: string) {

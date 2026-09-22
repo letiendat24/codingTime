@@ -32,6 +32,14 @@ export function executionActiveLimitExceeded() {
   return new HttpError(429, 'EXECUTION_ACTIVE_LIMIT_EXCEEDED', 'Too many active executions');
 }
 
+export function practiceRunInputInvalid(message = 'Practice run input is invalid') {
+  return new HttpError(400, 'PRACTICE_RUN_INPUT_INVALID', message);
+}
+
+export function practiceRunSampleUnavailable(message = 'Practice problem has no runnable public sample') {
+  return new HttpError(422, 'PRACTICE_RUN_SAMPLE_UNAVAILABLE', message);
+}
+
 export function workspaceRevisionNotFound() {
   return new HttpError(404, 'WORKSPACE_REVISION_NOT_FOUND', 'Workspace revision not found');
 }

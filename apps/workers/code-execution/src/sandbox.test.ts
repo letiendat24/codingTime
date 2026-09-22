@@ -42,7 +42,22 @@ describe('code execution sandbox configuration', () => {
     expect(args).toContain('--pids-limit');
     expect(args).toContain('64');
     expect(args).toContain('--read-only');
+    expect(args).toContain('--interactive');
     expect(args).toContain('/tmp:rw,noexec,nosuid,size=16m');
     expect(args).toContain('/tmp/codesync-code-execution/job:/workspace:ro');
+  });
+
+  it('uses the platform function adapter for practice function runs', () => {
+    const args = buildDockerRunArgs({
+      containerName: 'codesync-exec-test',
+      workDirectory: '/tmp/codesync-code-execution/job',
+      runtime: getRuntime('javascript'),
+      entryFile: 'index.js',
+      executionMode: 'FUNCTION',
+      env,
+    });
+
+    expect(args).toContain('CODESYNC_ENTRY_FILE=index.js');
+    expect(args[args.length - 1]).toBe('.codesync/practice-function-runner.cjs');
   });
 });

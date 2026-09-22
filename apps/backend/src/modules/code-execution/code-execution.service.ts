@@ -21,12 +21,14 @@ import {
   executionLanguageUnsupported,
   lessonWorkspaceNotAllowed,
   executionNotFound,
+  practiceRunInputInvalid,
+  practiceRunSampleUnavailable,
   workspaceFileInvalid,
   workspaceNotFound,
   workspaceRevisionNotFound,
 } from './code-execution.errors';
 import { CodeExecutionRepository } from './code-execution.repository';
-import type { ExecutionHistoryQuery, WorkspaceFileInput } from './code-execution.schemas';
+import type { ExecutionHistoryQuery, RunWorkspaceInput, WorkspaceFileInput } from './code-execution.schemas';
 import type {
   ExecutionDetailResponse,
   ExecutionHistoryItem,
@@ -41,6 +43,7 @@ const DEFAULT_STARTER_FILES: readonly WorkspaceFileInput[] = [
   { path: DEFAULT_ENTRY_FILE, content: 'console.log("Hello from CodeSync");\n' },
 ];
 const SUPPORTED_LANGUAGES = new Set([DEFAULT_LANGUAGE, 'typescript']);
+const STALE_EXECUTION_GRACE_MS = 5_000;
 
 export interface CodeExecutionMessagePublisher {
   publishExecutionRequested(message: AsyncMessage<CodeExecutionRequestedPayload>): void;
@@ -104,6 +107,57 @@ function filesFromJson(value: unknown): WorkspaceFileInput[] {
 
 function revisionFilesFromJson(value: unknown): WorkspaceFileInput[] {
   return filesFromJson(value);
+}
+
+function isFunctionPracticeWorkspace(workspace: Awaited<ReturnType<CodeExecutionRepository['findWorkspaceForUser']>>) {
+  return workspace?.practiceProblem?.executionContract === 'FUNCTION';
+}
+
+function hasOwnInput(input: RunWorkspaceInput) {
+  return Object.prototype.hasOwnProperty.call(input, 'input');
+}
+
+function serializeRunInput(value: unknown) {
+  const serialized = JSON.stringify(value);
+
+  if (serialized === undefined) {
+    throw practiceRunInputInvalid('Practice run input must be JSON-serializable');
+  }
+
+  return serialized;
+}
+
+function resolvePracticeRunInput(
+  workspace: NonNullable<Awaited<ReturnType<CodeExecutionRepository['findWorkspaceForUser']>>>,
+  input: RunWorkspaceInput,
+) {
+  if (!isFunctionPracticeWorkspace(workspace)) {
+    return null;
+  }
+
+  if (hasOwnInput(input)) {
+    if (input.publicTestCaseId) {
+      throw practiceRunInputInvalid('Choose either a public sample or custom input, not both');
+    }
+
+    return { stdin: serializeRunInput(input.input), selectedPublicTest: null };
+  }
+
+  const publicTests = workspace.practiceProblem?.testCases ?? [];
+
+  if (publicTests.length === 0) {
+    throw practiceRunSampleUnavailable();
+  }
+
+  const selectedPublicTest = input.publicTestCaseId
+    ? publicTests.find((test) => test.id === input.publicTestCaseId)
+    : publicTests[0];
+
+  if (!selectedPublicTest) {
+    throw practiceRunSampleUnavailable('Selected public sample is not available for this practice problem');
+  }
+
+  return { stdin: selectedPublicTest.input, selectedPublicTest };
 }
 
 function mapWorkspace(workspace: Workspace & { files: readonly WorkspaceFile[] }): WorkspaceResponse {
@@ -446,7 +500,12 @@ export class CodeExecutionService {
     return mapWorkspace(saved);
   }
 
-  async runWorkspace(userId: string, workspaceId: string, correlationId: string): Promise<ExecutionQueuedResponse> {
+  async runWorkspace(
+    userId: string,
+    workspaceId: string,
+    correlationId: string,
+    input: RunWorkspaceInput = {},
+  ): Promise<ExecutionQueuedResponse> {
     const now = new Date();
     const workspace = await this.repository.findWorkspaceForUser(userId, workspaceId);
 
@@ -456,11 +515,24 @@ export class CodeExecutionService {
 
     const language = validateLanguage(workspace.language);
     const files = workspace.files.map((file) => ({ path: file.path, content: file.content }));
+    const practiceRunInput = resolvePracticeRunInput(workspace, input);
 
     validateFiles(files, this.env);
 
     if (!files.some((file) => file.path === workspace.entryFile)) {
       throw workspaceFileInvalid('Workspace entry file is missing');
+    }
+
+    const queuedBefore = new Date(now.getTime() - (this.env.CODE_EXECUTION_TIMEOUT_MS * this.env.CODE_EXECUTION_MAX_ATTEMPTS) - STALE_EXECUTION_GRACE_MS);
+    const runningBefore = new Date(now.getTime() - this.env.CODE_EXECUTION_TIMEOUT_MS - STALE_EXECUTION_GRACE_MS);
+    const recovered = await this.repository.recoverStaleExecutionsForUser({
+      userId,
+      queuedBefore,
+      runningBefore,
+      recoveredAt: now,
+    });
+    if (recovered.queued > 0 || recovered.running > 0) {
+      this.logger.warn({ userId, recovered }, 'stale executions recovered before active limit check');
     }
 
     const activeExecutions = await this.repository.countActiveExecutions(userId);
@@ -492,10 +564,28 @@ export class CodeExecutionService {
         language,
         files,
         entryFile: workspace.entryFile,
+        executionMode: practiceRunInput ? 'FUNCTION' : 'DIRECT',
+        ...(practiceRunInput ? { stdin: practiceRunInput.stdin } : {}),
       },
     };
 
-    this.publisher.publishExecutionRequested(message);
+    try {
+      this.publisher.publishExecutionRequested(message);
+    } catch (error) {
+      await this.repository.finishExecution({
+        executionId: execution.id,
+        status: ExecutionStatus.FAILED,
+        exitCode: null,
+        stdout: '',
+        stderr: 'Unable to dispatch execution job.',
+        durationMs: 0,
+        memoryBytes: null,
+        errorCode: 'EXECUTION_DISPATCH_FAILED',
+        finishedAt: now,
+      });
+      this.logger.error({ error, userId, workspaceId, executionId: execution.id, correlationId }, 'execution dispatch failed');
+      throw error;
+    }
     this.logger.info({ userId, workspaceId, executionId: execution.id, jobId: execution.jobId, correlationId }, 'execution queued');
 
     return { id: execution.id, status: execution.status };

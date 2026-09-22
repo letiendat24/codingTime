@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   JudgeSubmissionStatus,
   PracticeProblemStatus,
@@ -23,6 +24,7 @@ import {
 import { PracticeRepository, practiceProblemInclude } from './practice.repository';
 import type {
   CreatePracticeProblemInput,
+  ImportPracticeTestCasesInput,
   InstructorPracticeListQuery,
   PracticeSubmissionListQuery,
   PracticeTestCaseInput,
@@ -59,11 +61,21 @@ function validateLanguage(language: string) {
 }
 
 function filesFromJson(value: unknown) {
-  const files = (value as { readonly files?: readonly { readonly path?: unknown; readonly content?: unknown }[] }).files ?? [];
+  const files = value && typeof value === 'object'
+    ? (value as { readonly files?: readonly { readonly path?: unknown; readonly content?: unknown }[] }).files ?? []
+    : [];
   return files.map((file) => ({
     path: typeof file.path === 'string' ? file.path : '',
     content: typeof file.content === 'string' ? file.content : '',
   }));
+}
+
+function examplesFromJson(value: unknown) {
+  return ((value as { readonly examples?: readonly unknown[] } | null)?.examples ?? []) as readonly {
+    readonly input: string;
+    readonly output: string;
+    readonly explanation?: string;
+  }[];
 }
 
 function validateFiles(files: readonly { readonly path: string; readonly content: string }[], entryFile: string, env: Env) {
@@ -117,6 +129,70 @@ function validateTestCasePayload(input: { readonly input: string; readonly expec
   }
 }
 
+function normalizeForFingerprint(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeForFingerprint(item));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, normalizeForFingerprint(item)]),
+    );
+  }
+  return value;
+}
+
+function practiceValidationFingerprint(problem: Prisma.PracticeProblemGetPayload<{ include: typeof practiceProblemInclude }>) {
+  const payload = {
+    title: problem.title,
+    description: problem.description,
+    inputFormat: problem.inputFormat,
+    outputFormat: problem.outputFormat,
+    constraints: problem.constraints,
+    examples: examplesFromJson(problem.examplesJson),
+    explanation: problem.explanation ?? null,
+    language: problem.language,
+    entryFile: problem.entryFile,
+    starterFiles: filesFromJson(problem.starterFilesJson),
+    referenceFiles: filesFromJson(problem.referenceFilesJson),
+    executionContract: problem.executionContract,
+    comparisonPolicy: problem.comparisonPolicy,
+    timeLimitMs: problem.timeLimitMs,
+    memoryLimitMb: problem.memoryLimitMb,
+    passScore: Number(problem.passScore),
+    scoringMode: problem.scoringMode,
+    tests: problem.testCases.map((test) => ({
+      name: test.name,
+      visibility: test.visibility,
+      input: test.input,
+      expectedOutput: test.expectedOutput,
+      weight: Number(test.weight),
+      position: test.position,
+    })),
+  };
+
+  return createHash('sha256').update(JSON.stringify(normalizeForFingerprint(payload))).digest('hex');
+}
+
+function validateStatement(problem: {
+  readonly title: string;
+  readonly description: string;
+  readonly inputFormat: string;
+  readonly outputFormat: string;
+  readonly constraints: string;
+}) {
+  const details: string[] = [];
+
+  if (!problem.title.trim()) details.push('Title is required');
+  if (!problem.description.trim()) details.push('Problem description is required');
+  if (!problem.inputFormat.trim()) details.push('Input format is required');
+  if (!problem.outputFormat.trim()) details.push('Output format is required');
+  if (!problem.constraints.trim()) details.push('Constraints are required');
+
+  return details;
+}
+
 function decimalToNumber(value: Prisma.Decimal | number | null | undefined) {
   return value instanceof Prisma.Decimal ? value.toNumber() : value ?? null;
 }
@@ -153,11 +229,21 @@ function mapProblem(problem: Prisma.PracticeProblemGetPayload<{ include: typeof 
     title: problem.title,
     slug: problem.slug,
     description: problem.description,
+    inputFormat: problem.inputFormat,
+    outputFormat: problem.outputFormat,
+    constraints: problem.constraints,
+    examples: examplesFromJson(problem.examplesJson),
+    explanation: problem.explanation,
     difficulty: problem.difficulty,
     status: problem.status,
     language: problem.language,
     entryFile: problem.entryFile,
     starterFiles: filesFromJson(problem.starterFilesJson),
+    referenceFiles: filesFromJson(problem.referenceFilesJson),
+    executionContract: problem.executionContract,
+    comparisonPolicy: problem.comparisonPolicy,
+    validatedAt: problem.validatedAt?.toISOString() ?? null,
+    validationFingerprint: problem.validationFingerprint,
     timeLimitMs: problem.timeLimitMs,
     memoryLimitMb: problem.memoryLimitMb,
     passScore: Number(problem.passScore),
@@ -204,9 +290,13 @@ export class PracticeService {
     const language = validateLanguage(input.language);
     const entryFile = safePath(input.entryFile);
     const files = input.starterFiles;
+    const referenceFiles = input.referenceFiles ?? [];
     const timeLimitMs = input.timeLimitMs ?? 5_000;
     const memoryLimitMb = input.memoryLimitMb ?? 128;
     validateFiles(files, entryFile, this.env);
+    if (referenceFiles.length > 0) {
+      validateFiles(referenceFiles, entryFile, this.env);
+    }
     validateResourceLimits({ timeLimitMs, memoryLimitMb }, this.env);
 
     try {
@@ -217,10 +307,18 @@ export class PracticeService {
           title: input.title,
           slug,
           description: input.description,
+          inputFormat: input.inputFormat,
+          outputFormat: input.outputFormat,
+          constraints: input.constraints,
+          examplesJson: { examples: input.examples } as Prisma.InputJsonValue,
+          explanation: input.explanation ?? null,
           difficulty: input.difficulty,
           language,
           entryFile,
           starterFilesJson: { files } as Prisma.InputJsonValue,
+          referenceFilesJson: referenceFiles.length > 0 ? { files: referenceFiles } as Prisma.InputJsonValue : Prisma.DbNull,
+          executionContract: input.executionContract,
+          comparisonPolicy: input.comparisonPolicy,
           timeLimitMs,
           memoryLimitMb,
           passScore: new Prisma.Decimal(input.passScore ?? 70),
@@ -267,9 +365,13 @@ export class PracticeService {
     const language = input.language === undefined ? existing.language : validateLanguage(input.language);
     const entryFile = input.entryFile === undefined ? existing.entryFile : safePath(input.entryFile);
     const files = input.starterFiles ?? filesFromJson(existing.starterFilesJson);
+    const referenceFiles = input.referenceFiles ?? filesFromJson(existing.referenceFilesJson);
     const timeLimitMs = input.timeLimitMs ?? existing.timeLimitMs;
     const memoryLimitMb = input.memoryLimitMb ?? existing.memoryLimitMb;
     validateFiles(files, entryFile, this.env);
+    if (referenceFiles.length > 0) {
+      validateFiles(referenceFiles, entryFile, this.env);
+    }
     validateResourceLimits({ timeLimitMs, memoryLimitMb }, this.env);
 
     try {
@@ -279,10 +381,21 @@ export class PracticeService {
           ...(input.title !== undefined ? { title: input.title } : {}),
           ...(input.slug !== undefined ? { slug: slugify(input.slug) } : {}),
           ...(input.description !== undefined ? { description: input.description } : {}),
+          ...(input.inputFormat !== undefined ? { inputFormat: input.inputFormat } : {}),
+          ...(input.outputFormat !== undefined ? { outputFormat: input.outputFormat } : {}),
+          ...(input.constraints !== undefined ? { constraints: input.constraints } : {}),
+          ...(input.examples !== undefined ? { examplesJson: { examples: input.examples } as Prisma.InputJsonValue } : {}),
+          ...(input.explanation !== undefined ? { explanation: input.explanation ?? null } : {}),
           ...(input.difficulty !== undefined ? { difficulty: input.difficulty } : {}),
           language,
           entryFile,
           starterFilesJson: { files } as Prisma.InputJsonValue,
+          referenceFilesJson: referenceFiles.length > 0 ? { files: referenceFiles } as Prisma.InputJsonValue : Prisma.DbNull,
+          ...(input.executionContract !== undefined ? { executionContract: input.executionContract } : {}),
+          ...(input.comparisonPolicy !== undefined ? { comparisonPolicy: input.comparisonPolicy } : {}),
+          validationFingerprint: null,
+          validatedAt: null,
+          validationSummaryJson: Prisma.DbNull,
           timeLimitMs,
           memoryLimitMb,
           ...(input.passScore !== undefined ? { passScore: new Prisma.Decimal(input.passScore) } : {}),
@@ -311,13 +424,12 @@ export class PracticeService {
     if (!problem) {
       throw practiceProblemNotOwned();
     }
-    const details: string[] = [];
-    if (!problem.testCases.some((test) => Number(test.weight) > 0)) {
-      details.push('At least one judgeable test case is required');
-    }
-    if (filesFromJson(problem.starterFilesJson).length === 0) {
-      details.push('Starter files are required');
-    }
+    const validation = this.validateProblemShape(problem);
+    const fingerprint = practiceValidationFingerprint(problem);
+    const details = [
+      ...validation.details,
+      ...(problem.validationFingerprint !== fingerprint ? ['Problem content changed after the last successful validation'] : []),
+    ];
     if (details.length > 0) {
       throw practiceProblemNotReady(details);
     }
@@ -327,6 +439,61 @@ export class PracticeService {
       archivedAt: null,
     });
     return { problem: mapProblem(updated) };
+  }
+
+  async validateProblem(instructorId: string, problemId: string) {
+    const problem = await this.repository.findInstructorProblem(instructorId, problemId);
+    if (!problem) {
+      throw practiceProblemNotOwned();
+    }
+    const validation = this.validateProblemShape(problem);
+    const fingerprint = practiceValidationFingerprint(problem);
+    const updated = await this.repository.updateProblem(problemId, {
+      validationFingerprint: validation.valid ? fingerprint : null,
+      validatedAt: validation.valid ? new Date() : null,
+      validationSummaryJson: {
+        valid: validation.valid,
+        issues: validation.details,
+        fingerprint,
+        note: 'Practice validation checks authoring contract, required fields, starter/reference files, and test configuration. Reference execution remains asynchronous infrastructure work.',
+      } as Prisma.InputJsonValue,
+    });
+
+    return {
+      valid: validation.valid,
+      fingerprint,
+      issues: validation.details,
+      problem: mapProblem(updated),
+    };
+  }
+
+  private validateProblemShape(problem: Prisma.PracticeProblemGetPayload<{ include: typeof practiceProblemInclude }>) {
+    const details = [
+      ...validateStatement(problem),
+    ];
+    const starterFiles = filesFromJson(problem.starterFilesJson);
+    const referenceFiles = filesFromJson(problem.referenceFilesJson);
+
+    if (problem.executionContract !== 'FUNCTION') {
+      details.push('Only FUNCTION execution contract is supported');
+    }
+    if (problem.comparisonPolicy !== 'NORMALIZED_TEXT') {
+      details.push('Only NORMALIZED_TEXT comparison policy is supported');
+    }
+    if (!starterFiles.some((file) => file.path === problem.entryFile)) {
+      details.push('Starter files must include the entry file');
+    }
+    if (!referenceFiles.some((file) => file.path === problem.entryFile)) {
+      details.push('Reference solution must include the entry file');
+    }
+    if (!problem.testCases.some((test) => Number(test.weight) > 0)) {
+      details.push('At least one judgeable test case is required');
+    }
+    if (!problem.testCases.some((test) => test.visibility === TestCaseVisibility.PUBLIC)) {
+      details.push('At least one public example test is required');
+    }
+
+    return { valid: details.length === 0, details };
   }
 
   async archiveProblem(instructorId: string, problemId: string) {
@@ -358,7 +525,59 @@ export class PracticeService {
       weight: new Prisma.Decimal(input.weight),
       position: input.position ?? problem.testCases.length + 1,
     });
+    await this.repository.updateProblem(problemId, {
+      validationFingerprint: null,
+      validatedAt: null,
+      validationSummaryJson: Prisma.DbNull,
+    });
     return { testCase: mapTestCase(testCase) };
+  }
+
+  async importTestCases(instructorId: string, problemId: string, input: ImportPracticeTestCasesInput) {
+    const problem = await this.repository.findInstructorProblem(instructorId, problemId);
+    if (!problem) {
+      throw practiceProblemNotOwned();
+    }
+    if (problem.status !== PracticeProblemStatus.DRAFT) {
+      throw practiceProblemInvalid('Only draft practice problems can be edited');
+    }
+    const nextCount = input.mode === 'REPLACE' ? input.testCases.length : problem.testCases.length + input.testCases.length;
+    if (nextCount > this.env.JUDGE_MAX_TEST_CASES) {
+      throw practiceProblemInvalid(`A practice problem can contain at most ${this.env.JUDGE_MAX_TEST_CASES} test cases`);
+    }
+    input.testCases.forEach((test) => validateTestCasePayload(test, this.env));
+
+    const testCases = await this.prisma.$transaction(async (transaction) => {
+      const repository = new PracticeRepository(transaction);
+      if (input.mode === 'REPLACE') {
+        await repository.deleteTestCases(problemId);
+      }
+      const offset = input.mode === 'REPLACE' ? 0 : problem.testCases.length;
+      for (const [index, test] of input.testCases.entries()) {
+        await repository.createTestCase(problemId, {
+          name: test.name,
+          visibility: test.visibility,
+          input: test.input,
+          expectedOutput: test.expectedOutput,
+          weight: new Prisma.Decimal(test.weight),
+          position: offset + index + 1,
+        });
+      }
+      await repository.updateProblem(problemId, {
+        validationFingerprint: null,
+        validatedAt: null,
+        validationSummaryJson: Prisma.DbNull,
+      });
+      return repository.listTestCases(problemId);
+    });
+
+    return {
+      imported: input.testCases.length,
+      mode: input.mode,
+      publicCount: testCases.filter((test) => test.visibility === TestCaseVisibility.PUBLIC).length,
+      hiddenCount: testCases.filter((test) => test.visibility === TestCaseVisibility.HIDDEN).length,
+      testCases: testCases.map(mapTestCase),
+    };
   }
 
   async updateTestCase(instructorId: string, testCaseId: string, input: PracticeTestCaseUpdateInput) {
@@ -382,6 +601,11 @@ export class PracticeService {
       ...(input.weight !== undefined ? { weight: new Prisma.Decimal(input.weight) } : {}),
       ...(input.position !== undefined ? { position: input.position } : {}),
     });
+    await this.repository.updateProblem(testCase.practiceProblemId, {
+      validationFingerprint: null,
+      validatedAt: null,
+      validationSummaryJson: Prisma.DbNull,
+    });
     return { testCase: mapTestCase(updated) };
   }
 
@@ -394,6 +618,11 @@ export class PracticeService {
       throw practiceProblemInvalid('Only draft practice problems can be edited');
     }
     await this.repository.deleteTestCase(testCaseId);
+    await this.repository.updateProblem(testCase.practiceProblemId, {
+      validationFingerprint: null,
+      validatedAt: null,
+      validationSummaryJson: Prisma.DbNull,
+    });
   }
 
   async reorderTestCases(instructorId: string, problemId: string, orderedIds: readonly string[]) {
@@ -415,6 +644,19 @@ export class PracticeService {
       }
     });
     return { testCases: (await this.repository.listTestCases(problemId)).map(mapTestCase) };
+  }
+
+  async deleteProblem(instructorId: string, problemId: string) {
+    const problem = await this.repository.findInstructorProblem(instructorId, problemId);
+    if (!problem) {
+      throw practiceProblemNotOwned();
+    }
+    const submissions = await this.repository.countProblemSubmissions(problemId);
+    if (submissions > 0) {
+      await this.repository.updateProblem(problemId, { status: PracticeProblemStatus.ARCHIVED, archivedAt: new Date() });
+      return;
+    }
+    await this.repository.deleteProblem(problemId);
   }
 
   async listStudentProblems(userId: string, query: StudentPracticeListQuery) {
@@ -454,9 +696,16 @@ export class PracticeService {
         title: problem.title,
         slug: problem.slug,
         description: problem.description,
+        inputFormat: problem.inputFormat,
+        outputFormat: problem.outputFormat,
+        constraints: problem.constraints,
+        examples: examplesFromJson(problem.examplesJson),
+        explanation: problem.explanation,
         difficulty: problem.difficulty,
         language: problem.language,
         entryFile: problem.entryFile,
+        executionContract: problem.executionContract,
+        comparisonPolicy: problem.comparisonPolicy,
         timeLimitMs: problem.timeLimitMs,
         memoryLimitMb: problem.memoryLimitMb,
         passScore: Number(problem.passScore),

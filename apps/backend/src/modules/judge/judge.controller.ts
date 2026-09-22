@@ -8,6 +8,7 @@ import {
   testCaseParamsSchema,
   testCaseUpdateSchema,
   upsertCodingConfigSchema,
+  videoPracticeSubmissionSchema,
   workspaceParamsSchema,
 } from './judge.schemas';
 import type { JudgeService } from './judge.service';
@@ -58,6 +59,13 @@ export class JudgeController {
   submitWorkspace = async (request: Request, response: Response) => {
     const { workspaceId } = workspaceParamsSchema.parse(request.params);
     const result = await this.service.submitWorkspace(request.auth!.userId, workspaceId, request.requestId);
+    response.status(202).json(result);
+  };
+
+  submitVideoPracticeStep = async (request: Request, response: Response) => {
+    const { checkpointId } = checkpointParamsSchema.parse(request.params);
+    const body = videoPracticeSubmissionSchema.parse(request.body);
+    const result = await this.service.submitVideoPracticeStep(request.auth!.userId, checkpointId, body.workspaceId, request.requestId);
     response.status(202).json(result);
   };
 

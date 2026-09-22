@@ -28,6 +28,11 @@ const environmentSchema = z.object({
   WORKSPACE_MAX_FILE_BYTES: z.coerce.number().int().min(1_024).max(500_000).default(100_000),
   WORKSPACE_MAX_TOTAL_BYTES: z.coerce.number().int().min(1_024).max(1_000_000).default(200_000),
   WORKSPACE_MAX_REVISIONS: z.coerce.number().int().min(1).max(50).default(10),
+  GEMINI_API_KEY: z.string().min(1).optional(),
+  GEMINI_MODEL: z.string().trim().min(1).default('gemini-3.6-flash'),
+  AI_VERIFICATION_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(20_000),
+  AI_VERIFICATION_MAX_INPUT_BYTES: z.coerce.number().int().min(10_000).max(200_000).default(60_000),
+  AI_VERIFICATION_COOLDOWN_MS: z.coerce.number().int().min(0).max(60_000).default(2_000),
   CODE_EXECUTION_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(5_000),
   CODE_EXECUTION_MEMORY_MB: z.coerce.number().int().min(16).max(512).default(128),
   CODE_EXECUTION_CPU_LIMIT: z.coerce.number().min(0.1).max(2).default(0.5),
@@ -85,8 +90,19 @@ const environmentSchema = z.object({
 });
 
 type RawEnv = z.infer<typeof environmentSchema>;
+type OptionalAiEnvKeys =
+  | 'GEMINI_API_KEY'
+  | 'GEMINI_MODEL'
+  | 'AI_VERIFICATION_TIMEOUT_MS'
+  | 'AI_VERIFICATION_MAX_INPUT_BYTES'
+  | 'AI_VERIFICATION_COOLDOWN_MS';
 
-export interface Env extends RawEnv {
+export interface Env extends Omit<RawEnv, OptionalAiEnvKeys> {
+  readonly GEMINI_API_KEY?: string | undefined;
+  readonly GEMINI_MODEL?: string | undefined;
+  readonly AI_VERIFICATION_TIMEOUT_MS?: number | undefined;
+  readonly AI_VERIFICATION_MAX_INPUT_BYTES?: number | undefined;
+  readonly AI_VERIFICATION_COOLDOWN_MS?: number | undefined;
   readonly JWT_ACCESS_TTL_SECONDS: number;
   readonly JWT_REFRESH_TTL_SECONDS: number;
 }

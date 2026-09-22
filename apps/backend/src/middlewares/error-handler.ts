@@ -7,6 +7,7 @@ interface ErrorResponseBody {
     readonly code: string;
     readonly message: string;
     readonly details?: readonly string[];
+    readonly issues?: readonly unknown[];
     readonly requestId?: string;
     readonly stack?: string;
   };
@@ -34,6 +35,7 @@ export function errorHandler(_environment: string): ErrorRequestHandler {
         code,
         message: statusCode >= 500 ? 'Internal server error' : message,
         ...(error instanceof HttpError && error.details ? { details: error.details } : {}),
+        ...(error instanceof HttpError && error.issues ? { issues: error.issues } : {}),
         requestId: request.requestId,
       },
     };

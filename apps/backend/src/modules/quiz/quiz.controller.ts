@@ -5,6 +5,9 @@ import {
   lessonIdParamSchema,
   questionIdParamSchema,
   quizIdParamSchema,
+  quizQuestionExportQuerySchema,
+  quizQuestionImportPreviewSchema,
+  quizQuestionImportSchema,
   quizQuestionInputSchema,
   reorderQuizQuestionsSchema,
   submitQuizAttemptSchema,
@@ -66,6 +69,31 @@ export class QuizController {
     const body = reorderQuizQuestionsSchema.parse(request.body);
     await this.quizzes.reorderQuestions(auth.userId, params.quizId, body.orderedIds);
     response.status(204).send();
+  };
+
+  previewQuestionImport = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    const params = quizIdParamSchema.parse(request.params);
+    const body = quizQuestionImportPreviewSchema.parse(request.body);
+    response.status(200).json(await this.quizzes.previewQuestionImport(auth.userId, params.quizId, body));
+  };
+
+  importQuestions = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    const params = quizIdParamSchema.parse(request.params);
+    const body = quizQuestionImportSchema.parse(request.body);
+    response.status(200).json(await this.quizzes.importQuestions(auth.userId, params.quizId, body));
+  };
+
+  exportQuestions = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    const params = quizIdParamSchema.parse(request.params);
+    const query = quizQuestionExportQuerySchema.parse(request.query);
+    const exported = await this.quizzes.exportQuestions(auth.userId, params.quizId, query.format.toUpperCase() as 'JSON' | 'XLSX');
+
+    response.setHeader('Content-Type', exported.contentType);
+    response.setHeader('Content-Disposition', `attachment; filename="${exported.filename}"`);
+    response.status(200).send(exported.buffer);
   };
 
   getStudentQuiz = async (request: Request, response: Response) => {

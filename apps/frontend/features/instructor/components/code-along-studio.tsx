@@ -1,10 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Camera,
   Plus,
   Clock,
   Trash2,
@@ -16,6 +15,11 @@ import {
   X,
   Code2,
   ClipboardCheck,
+  ChevronDown,
+  ChevronUp,
+  Settings,
+  Sliders,
+  CheckCircle2,
 } from 'lucide-react';
 import { Button } from '../../../design-system/components/button';
 import { Input } from '../../../design-system/components/input';
@@ -25,6 +29,12 @@ import { type CodeSnapshotDetail, requestJson } from '../../../lib/api';
 import { formatTime, parseTimeString, findPreviousSnapshot } from '../../../lib/video-learning';
 import { useTheme } from '../../../providers/theme-provider';
 import { useToast } from '../../../providers/toast-provider';
+import {
+  resolveEffectivePracticeConfig,
+  type CodeAlongWorkspaceType,
+  type VideoPracticeBehavior,
+  type VideoPracticeVerificationMode,
+} from './code-along-auto-config';
 
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
 
@@ -38,6 +48,38 @@ export interface CodeAlongStudioProps {
 interface WorkspaceFileState {
   path: string;
   content: string;
+}
+
+interface CodeAlongConfigResponse {
+  readonly id: string;
+  readonly lessonId: string;
+  readonly enabled: boolean;
+  readonly language: string;
+  readonly entryFile: string | null;
+  readonly workspaceType: CodeAlongWorkspaceType;
+  readonly defaultPracticeBehavior: VideoPracticeBehavior;
+  readonly defaultVerificationStrategy: string;
+  readonly allowRun: boolean;
+  readonly allowCheck: boolean;
+  readonly allowJudge: boolean;
+  readonly allowCreateFiles: boolean;
+  readonly allowCreateFolders: boolean;
+  readonly allowRenameFiles: boolean;
+  readonly allowDeleteFiles: boolean;
+}
+
+interface CheckpointDetail {
+  readonly id: string;
+  readonly timestampSeconds: number;
+  readonly title: string;
+  readonly description: string | null;
+  readonly required: boolean;
+  readonly practiceEnabled: boolean;
+  readonly practiceConfigMode?: 'AUTO' | 'MANUAL_OVERRIDE';
+  readonly practiceBehavior: VideoPracticeBehavior;
+  readonly practiceVerificationMode: VideoPracticeVerificationMode;
+  readonly practiceSnapshotId: string | null;
+  readonly practiceTargetFilePath: string | null;
 }
 
 function detectMonacoLanguage(filePath: string, defaultLanguage: string): string {
@@ -89,19 +131,22 @@ export function CodeAlongStudio({
   const { resolvedTheme } = useTheme();
   const toast = useToast();
 
+  // 1. LESSON / VIDEO LEVEL STATE
   const [enabled, setEnabled] = useState(true);
   const [language, setLanguage] = useState('typescript');
   const [entryFile, setEntryFile] = useState('src/index.ts');
-  const [workspaceType, setWorkspaceType] = useState<'SINGLE_FILE' | 'MULTI_FILE'>('SINGLE_FILE');
+  const [workspaceType, setWorkspaceType] = useState<CodeAlongWorkspaceType>('SINGLE_FILE');
+  const [defaultPracticeBehavior, setDefaultPracticeBehavior] = useState<VideoPracticeBehavior>('REQUIRED');
+  const [defaultVerificationStrategy, setDefaultVerificationStrategy] = useState<string>('AUTO');
   const [allowRun, setAllowRun] = useState(true);
-  const [allowCheck, setAllowCheck] = useState(true);
   const [allowJudge, setAllowJudge] = useState(true);
   const [allowCreateFiles, setAllowCreateFiles] = useState(false);
   const [allowCreateFolders, setAllowCreateFolders] = useState(false);
   const [allowRenameFiles, setAllowRenameFiles] = useState(false);
   const [allowDeleteFiles, setAllowDeleteFiles] = useState(false);
+  const [showVideoSettings, setShowVideoSettings] = useState(false);
 
-  // Multi-File Snapshot Authoring State
+  // 2. MILESTONE AUTHORING STATE
   const [isCreatingSnapshot, setIsCreatingSnapshot] = useState(false);
   const [editingSnapshotId, setEditingSnapshotId] = useState<string | null>(null);
   const [snapshotTimeString, setSnapshotTimeString] = useState('00:00');
@@ -110,10 +155,15 @@ export function CodeAlongStudio({
   const [activeFilePath, setActiveFilePath] = useState('src/index.ts');
   const [newFilePathInput, setNewFilePathInput] = useState('');
   const [isAddingFile, setIsAddingFile] = useState(false);
-  const [practiceEnabled, setPracticeEnabled] = useState(false);
-  const [practiceInstruction, setPracticeInstruction] = useState('');
-  const [practiceVerificationMode, setPracticeVerificationMode] = useState<'NONE' | 'CODE_COMPARE' | 'FILE_COMPARE' | 'STRUCTURAL' | 'WORKSPACE_STRUCTURE' | 'TESTS'>('NONE');
-  const [practiceBehavior, setPracticeBehavior] = useState<'GUIDED' | 'REQUIRED'>('GUIDED');
+  const [studentTask, setStudentTask] = useState('');
+
+  // Milestone Override State
+  const [showOverride, setShowOverride] = useState(false);
+  const [isOverridden, setIsOverridden] = useState(false);
+  const [overrideVerification, setOverrideVerification] = useState<VideoPracticeVerificationMode | 'INHERIT'>('INHERIT');
+  const [overrideBehavior, setOverrideBehavior] = useState<VideoPracticeBehavior | 'INHERIT'>('INHERIT');
+  const [overrideTargetFile, setOverrideTargetFile] = useState<string>('');
+  const [overrideSnapshotId, setOverrideSnapshotId] = useState<string>('');
 
   // Query existing snapshots
   const snapshotsQuery = useQuery({
@@ -124,37 +174,153 @@ export function CodeAlongStudio({
       ),
   });
 
-  const snapshots = [...(snapshotsQuery.data?.codeSnapshots ?? [])].sort(
-    (a, b) => a.timestampSeconds - b.timestampSeconds,
-  );
+  // Query existing checkpoints
+  const checkpointsQuery = useQuery({
+    queryKey: ['instructor-video-checkpoints', videoAssetId],
+    queryFn: () =>
+      requestJson<{ readonly checkpoints: readonly CheckpointDetail[] }>(
+        `/instructor/videos/${videoAssetId}/checkpoints`,
+      ),
+  });
 
-  const saveConfig = useMutation({
-    mutationFn: (nextEnabled: boolean) =>
-      requestJson(`/instructor/lessons/${lessonId}/code-along`, {
+  // Query lesson code-along config
+  const lessonConfigQuery = useQuery({
+    queryKey: ['instructor-video-lesson-code-along', lessonId],
+    queryFn: () =>
+      requestJson<{ readonly config: CodeAlongConfigResponse }>(
+        `/instructor/lessons/${lessonId}/code-along`,
+      ),
+  });
+
+  useEffect(() => {
+    if (lessonConfigQuery.data?.config) {
+      const cfg = lessonConfigQuery.data.config;
+      setEnabled(cfg.enabled);
+      setLanguage(cfg.language || 'typescript');
+      setEntryFile(cfg.entryFile || 'src/index.ts');
+      setWorkspaceType(cfg.workspaceType || 'SINGLE_FILE');
+      setDefaultPracticeBehavior(cfg.defaultPracticeBehavior || 'REQUIRED');
+      setDefaultVerificationStrategy(cfg.defaultVerificationStrategy || 'AUTO');
+      setAllowRun(cfg.allowRun ?? true);
+      setAllowJudge(cfg.allowJudge ?? true);
+      setAllowCreateFiles(cfg.allowCreateFiles ?? false);
+      setAllowCreateFolders(cfg.allowCreateFolders ?? false);
+      setAllowRenameFiles(cfg.allowRenameFiles ?? false);
+      setAllowDeleteFiles(cfg.allowDeleteFiles ?? false);
+    }
+  }, [lessonConfigQuery.data]);
+
+  const snapshots = useMemo(() => {
+    return [...(snapshotsQuery.data?.codeSnapshots ?? [])].sort(
+      (a, b) => a.timestampSeconds - b.timestampSeconds,
+    );
+  }, [snapshotsQuery.data]);
+
+  const checkpoints = useMemo(() => {
+    return checkpointsQuery.data?.checkpoints ?? [];
+  }, [checkpointsQuery.data]);
+
+  // Save Lesson-level configuration
+  const saveLessonConfigMutation = useMutation({
+    mutationFn: (nextEnabled: boolean = enabled) =>
+      requestJson<{ readonly config: CodeAlongConfigResponse }>(`/instructor/lessons/${lessonId}/code-along`, {
         method: 'PUT',
         body: JSON.stringify({
           enabled: nextEnabled,
           language,
           entryFile,
           workspaceType,
+          defaultPracticeBehavior,
+          defaultVerificationStrategy,
           allowEditFiles: true,
           allowCreateFiles,
           allowCreateFolders,
           allowRenameFiles,
           allowDeleteFiles,
           allowRun,
-          allowCheck,
           allowJudge,
         }),
       }),
-    onSuccess: () => {
-      toast.success('Code-along configuration saved');
+    onSuccess: (data) => {
+      setEnabled(data.config.enabled);
+      setLanguage(data.config.language);
+      setEntryFile(data.config.entryFile ?? '');
+      setWorkspaceType(data.config.workspaceType);
+      setDefaultPracticeBehavior(data.config.defaultPracticeBehavior);
+      setDefaultVerificationStrategy(data.config.defaultVerificationStrategy);
+      setAllowRun(data.config.allowRun);
+      setAllowJudge(data.config.allowJudge);
+      setAllowCreateFiles(data.config.allowCreateFiles);
+      setAllowCreateFolders(data.config.allowCreateFolders);
+      setAllowRenameFiles(data.config.allowRenameFiles);
+      setAllowDeleteFiles(data.config.allowDeleteFiles);
+      toast.success('Video Code-Along Settings saved');
+      void queryClient.invalidateQueries({ queryKey: ['instructor-video-lesson-code-along', lessonId] });
     },
     onError: (error) => {
-      toast.error('Failed to update code-along configuration', error instanceof Error ? error.message : undefined);
+      toast.error('Failed to save code-along settings', error instanceof Error ? error.message : undefined);
     },
   });
 
+  // Derived effective config preview for current milestone
+  const currentTimestampSeconds = parseTimeString(snapshotTimeString);
+  const effectivePracticePreview = useMemo(() => {
+    const allSnapshotCandidates = snapshots.map((s) => ({
+      id: s.id,
+      timestampSeconds: s.timestampSeconds,
+      files: s.files,
+    }));
+
+    return resolveEffectivePracticeConfig({
+      lessonDefaults: {
+        defaultPracticeBehavior,
+        defaultVerificationStrategy,
+        language,
+        entryFile,
+      },
+      checkpointOverride: isOverridden
+        ? {
+            behavior: overrideBehavior === 'INHERIT' ? undefined : overrideBehavior,
+            verificationMode: overrideVerification === 'INHERIT' ? undefined : overrideVerification,
+            targetFilePath: overrideTargetFile.trim() || undefined,
+            practiceSnapshotId: overrideSnapshotId || undefined,
+          }
+        : null,
+      checkpointContext: {
+        timestampSeconds: currentTimestampSeconds,
+        studentTask,
+        activeFilePath,
+        hasValidTests: false,
+        judgeSupported: allowJudge,
+        structuralSupported: true,
+      },
+      milestoneSnapshot: {
+        id: editingSnapshotId ?? 'new-snapshot',
+        timestampSeconds: currentTimestampSeconds,
+        files,
+      },
+      allSnapshots: allSnapshotCandidates,
+    });
+  }, [
+    activeFilePath,
+    allowJudge,
+    currentTimestampSeconds,
+    defaultPracticeBehavior,
+    defaultVerificationStrategy,
+    editingSnapshotId,
+    entryFile,
+    files,
+    isOverridden,
+    language,
+    overrideBehavior,
+    overrideSnapshotId,
+    overrideTargetFile,
+    overrideVerification,
+    snapshots,
+    studentTask,
+  ]);
+
+  // Save Milestone Snapshot & Optional Practice Checkpoint
   const saveSnapshotMutation = useMutation({
     mutationFn: async () => {
       const timestampSeconds = parseTimeString(snapshotTimeString);
@@ -165,61 +331,86 @@ export function CodeAlongStudio({
         files: files.map((f) => ({ path: f.path.trim(), content: f.content })),
       };
 
-      const saved = editingSnapshotId
+      const savedSnapshot = editingSnapshotId
         ? await requestJson<{ readonly codeSnapshot: CodeSnapshotDetail }>(
-          `/instructor/code-snapshots/${editingSnapshotId}`,
-          {
-            method: 'PATCH',
-            body: JSON.stringify(payload),
-          },
-        )
+            `/instructor/code-snapshots/${editingSnapshotId}`,
+            {
+              method: 'PATCH',
+              body: JSON.stringify(payload),
+            },
+          )
         : await requestJson<{ readonly codeSnapshot: CodeSnapshotDetail }>(
-          `/instructor/videos/${videoAssetId}/code-snapshots`,
-          {
-            method: 'POST',
-            body: JSON.stringify(payload),
-          },
-        );
+            `/instructor/videos/${videoAssetId}/code-snapshots`,
+            {
+              method: 'POST',
+              body: JSON.stringify(payload),
+            },
+          );
 
-      if (practiceEnabled && !editingSnapshotId) {
-        const checkpoint = await requestJson<{ readonly checkpoint: { readonly id: string } }>(
+      const snapshotId = savedSnapshot.codeSnapshot.id;
+
+      const latestCheckpoints = await requestJson<{ readonly checkpoints: readonly CheckpointDetail[] }>(
+        `/instructor/videos/${videoAssetId}/checkpoints`,
+      );
+      // Every milestone has one corresponding code checkpoint at the same timestamp.
+      let matchingCheckpoint = latestCheckpoints.checkpoints.find((c) => c.timestampSeconds === timestampSeconds);
+
+      if (!matchingCheckpoint) {
+        const createdCp = await requestJson<{ readonly checkpoint: CheckpointDetail }>(
           `/instructor/videos/${videoAssetId}/checkpoints`,
           {
             method: 'POST',
             body: JSON.stringify({
               timestampSeconds,
               type: 'INFO',
-              title: snapshotTitle.trim() || `Practice at ${formatTime(timestampSeconds)}`,
-              description: practiceInstruction.trim() || null,
-              required: practiceBehavior === 'REQUIRED',
+              title: snapshotTitle.trim() || `Milestone at ${formatTime(timestampSeconds)}`,
+              description: null,
+              required: effectivePracticePreview.behavior === 'REQUIRED',
               pauseVideo: false,
             }),
           },
         );
-        await requestJson(`/instructor/checkpoints/${checkpoint.checkpoint.id}/practice-step`, {
-          method: 'PUT',
+        matchingCheckpoint = createdCp.checkpoint;
+      } else {
+        await requestJson(`/instructor/checkpoints/${matchingCheckpoint.id}`, {
+          method: 'PATCH',
           body: JSON.stringify({
-            practiceEnabled: true,
-            practiceVerificationMode,
-            practiceBehavior,
-            practiceSnapshotId: saved.codeSnapshot.id,
-            practiceTargetFilePath: activeFilePath,
-            practiceVerificationRules: practiceVerificationMode === 'WORKSPACE_STRUCTURE'
-              ? { requiredPaths: files.map((file) => file.path), rules: [{ type: 'FILE_EXISTS', path: activeFilePath }] }
-              : practiceVerificationMode === 'STRUCTURAL'
-                ? { rules: [{ type: 'FILE_EXISTS', path: activeFilePath }] }
-                : null,
+            title: snapshotTitle.trim() || matchingCheckpoint.title,
+            required: effectivePracticePreview.behavior === 'REQUIRED',
+            pauseVideo: false,
           }),
         });
       }
 
-      return saved;
+      const practicePayload = isOverridden
+        ? {
+            configMode: 'MANUAL_OVERRIDE',
+            practiceEnabled: true,
+            practiceBehavior: overrideBehavior === 'INHERIT' ? defaultPracticeBehavior : overrideBehavior,
+            practiceVerificationMode: overrideVerification === 'INHERIT' ? (defaultVerificationStrategy === 'AUTO' ? effectivePracticePreview.verificationMode : defaultVerificationStrategy) : overrideVerification,
+            practiceSnapshotId: overrideSnapshotId || snapshotId,
+            practiceTargetFilePath: overrideTargetFile.trim() || activeFilePath,
+          }
+        : {
+            configMode: 'AUTO',
+            practiceEnabled: true,
+            practiceTargetFilePath: activeFilePath,
+          };
+
+      await requestJson(`/instructor/checkpoints/${matchingCheckpoint.id}/practice-step`, {
+        method: 'PUT',
+        body: JSON.stringify(practicePayload),
+      });
+
+      return savedSnapshot;
     },
     onSuccess: () => {
       setIsCreatingSnapshot(false);
       setEditingSnapshotId(null);
       toast.success(editingSnapshotId ? 'Milestone updated' : 'Milestone snapshot captured');
       void queryClient.invalidateQueries({ queryKey: ['instructor-code-snapshots', videoAssetId] });
+      void queryClient.invalidateQueries({ queryKey: ['instructor-video-checkpoints', videoAssetId] });
+      void queryClient.invalidateQueries({ queryKey: ['instructor-video-lesson-code-along', lessonId] });
     },
     onError: (error) => {
       toast.error('Failed to save code snapshot', error instanceof Error ? error.message : undefined);
@@ -232,6 +423,7 @@ export function CodeAlongStudio({
     onSuccess: () => {
       toast.success('Snapshot deleted');
       void queryClient.invalidateQueries({ queryKey: ['instructor-code-snapshots', videoAssetId] });
+      void queryClient.invalidateQueries({ queryKey: ['instructor-video-checkpoints', videoAssetId] });
     },
     onError: (error) => {
       toast.error('Failed to delete snapshot', error instanceof Error ? error.message : undefined);
@@ -245,18 +437,19 @@ export function CodeAlongStudio({
     setEditingSnapshotId(null);
     setSnapshotTimeString(formattedCurrentTime);
     setSnapshotTitle(`Milestone at ${formattedCurrentTime}`);
-    setPracticeEnabled(false);
-    setPracticeInstruction('');
-    setPracticeVerificationMode('NONE');
-    setPracticeBehavior('GUIDED');
+    setStudentTask('');
+    setShowOverride(false);
+    setIsOverridden(false);
+    setOverrideVerification('INHERIT');
+    setOverrideBehavior('INHERIT');
+    setOverrideTargetFile('');
+    setOverrideSnapshotId('');
 
     if (prevSnapshot && prevSnapshot.files.length > 0) {
-      // Smart clone from previous milestone
       const clonedFiles = prevSnapshot.files.map((f) => ({ path: f.path, content: f.content }));
       setFiles(clonedFiles);
       setActiveFilePath(clonedFiles[0]?.path ?? entryFile ?? 'src/index.ts');
     } else {
-      // Starter file
       const defaultPath = entryFile || 'src/index.ts';
       setFiles([{ path: defaultPath, content: `// Project milestone at ${formattedCurrentTime}\n` }]);
       setActiveFilePath(defaultPath);
@@ -269,10 +462,25 @@ export function CodeAlongStudio({
     setEditingSnapshotId(snap.id);
     setSnapshotTimeString(formatTime(snap.timestampSeconds));
     setSnapshotTitle(snap.title ?? '');
-    setPracticeEnabled(false);
-    setPracticeInstruction('');
-    setPracticeVerificationMode('NONE');
-    setPracticeBehavior('GUIDED');
+
+    const matchingCp = checkpoints.find((c) => c.timestampSeconds === snap.timestampSeconds);
+    setStudentTask(matchingCp?.description ?? '');
+
+    if (matchingCp?.practiceConfigMode === 'MANUAL_OVERRIDE') {
+      setIsOverridden(true);
+      setShowOverride(true);
+      setOverrideVerification(matchingCp.practiceVerificationMode ?? 'INHERIT');
+      setOverrideBehavior(matchingCp.practiceBehavior ?? 'INHERIT');
+      setOverrideTargetFile(matchingCp.practiceTargetFilePath ?? '');
+      setOverrideSnapshotId(matchingCp.practiceSnapshotId ?? snap.id);
+    } else {
+      setIsOverridden(false);
+      setShowOverride(false);
+      setOverrideVerification('INHERIT');
+      setOverrideBehavior('INHERIT');
+      setOverrideTargetFile('');
+      setOverrideSnapshotId('');
+    }
 
     const snapFiles = snap.files.length > 0
       ? snap.files.map((f) => ({ path: f.path, content: f.content }))
@@ -341,108 +549,184 @@ export function CodeAlongStudio({
 
   return (
     <div className="space-y-6 pt-4 border-t border-border/60">
-      {/* Code Along Header & Toggle */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
-            <Camera className="h-4 w-4 text-foreground" />
-            <span>Code-Along Milestone Studio</span>
-          </h3>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Capture instructor code milestones across video timestamps for interactive student sync.
-          </p>
-        </div>
+      {/* 1. CONSOLIDATED VIDEO CODE-ALONG SETTINGS PANEL */}
+      <div className="rounded-xl border border-border/70 bg-card p-4 shadow-2xs space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <Sliders className="h-4 w-4" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-bold text-foreground">Video Code-Along Settings</h3>
+                <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle2 className="h-3 w-3" />
+                  {workspaceType === 'MULTI_FILE' ? 'Project workspace' : 'Single-file workspace'}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Configured once for the entire video lesson. Milestones automatically inherit these settings.
+              </p>
+            </div>
+          </div>
 
-        <label className="flex items-center gap-2.5 text-xs font-semibold text-foreground cursor-pointer bg-muted/50 px-3 py-1.5 rounded-lg border border-border/70">
-          <span>Enable Code-Along</span>
-          <Switch
-            checked={enabled}
-            onCheckedChange={(checked) => {
-              setEnabled(checked);
-              saveConfig.mutate(checked);
-            }}
-          />
-        </label>
-      </div>
-
-      {/* Language & Entry File Configuration */}
-      <div className="grid gap-4 sm:grid-cols-2 p-4 rounded-xl border border-border/70 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-        <div>
-          <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-            Language
-          </label>
-          <Select
-            value={language}
-            onChange={(e) => {
-              setLanguage(e.target.value);
-              saveConfig.mutate(enabled);
-            }}
-            options={[
-              { label: 'TypeScript / JavaScript', value: 'typescript' },
-              { label: 'Python 3', value: 'python' },
-              { label: 'Go', value: 'go' },
-              { label: 'Rust', value: 'rust' },
-              { label: 'C++', value: 'cpp' },
-              { label: 'Java', value: 'java' },
-            ]}
-          />
-        </div>
-        <div>
-          <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-            Entry File
-          </label>
-          <Input
-            value={entryFile}
-            onChange={(e) => {
-              setEntryFile(e.target.value);
-              saveConfig.mutate(enabled);
-            }}
-            placeholder="e.g. src/index.ts or main.py"
-            className="font-mono text-xs"
-          />
-        </div>
-      </div>
-
-      <div className="grid gap-4 rounded-xl border border-border/70 bg-card p-4 shadow-[0_1px_3px_rgba(0,0,0,0.02)] lg:grid-cols-[220px_minmax(0,1fr)]">
-        <div>
-          <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Student Workspace</label>
-          <Select
-            value={workspaceType}
-            onChange={(event) => {
-              setWorkspaceType(event.target.value as typeof workspaceType);
-              saveConfig.mutate(enabled);
-            }}
-            options={[
-              { label: 'Single file', value: 'SINGLE_FILE' },
-              { label: 'Multi-file project', value: 'MULTI_FILE' },
-            ]}
-          />
-        </div>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-          {([
-            ['Run', allowRun, setAllowRun],
-            ['Check', allowCheck, setAllowCheck],
-            ['Judge', allowJudge, setAllowJudge],
-            ['Create files', allowCreateFiles, setAllowCreateFiles],
-            ['Create folders', allowCreateFolders, setAllowCreateFolders],
-            ['Rename', allowRenameFiles, setAllowRenameFiles],
-            ['Delete', allowDeleteFiles, setAllowDeleteFiles],
-          ] as const).map(([label, value, setter]) => (
-            <label key={label} className="flex items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-xs font-medium text-foreground">
-              <span>{label}</span>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 text-xs font-semibold text-foreground cursor-pointer bg-muted/40 px-3 py-1.5 rounded-lg border border-border/60">
+              <span>Enable Code-Along</span>
               <Switch
-                checked={value}
+                checked={enabled}
                 onCheckedChange={(checked) => {
-                  setter(checked);
-                  saveConfig.mutate(enabled);
+                  setEnabled(checked);
+                  saveLessonConfigMutation.mutate(checked);
                 }}
               />
             </label>
-          ))}
+
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setShowVideoSettings((v) => !v)}
+              className="text-xs gap-1.5"
+            >
+              <Settings className="h-3.5 w-3.5" />
+              <span>{showVideoSettings ? 'Hide Settings' : 'Customize'}</span>
+              {showVideoSettings ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            </Button>
+          </div>
         </div>
+
+        {/* Summary Line when collapsed */}
+        {!showVideoSettings && (
+          <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-muted-foreground">
+            <span className="font-medium text-foreground">Summary:</span>
+            <span className="rounded bg-muted px-2 py-0.5">{workspaceType === 'MULTI_FILE' ? 'Project' : 'Single-file'}</span>
+            <span>•</span>
+            <span>Language: <strong className="text-foreground font-mono">{language}</strong></span>
+            <span>•</span>
+            <span>Run: <strong className="text-foreground">{allowRun ? 'Enabled' : 'Disabled'}</strong></span>
+            <span>•</span>
+            <span>Judge: <strong className="text-foreground">{allowJudge ? 'Enabled' : 'Disabled'}</strong></span>
+            <span>•</span>
+            <span>Practice default: <strong className="text-foreground">{defaultPracticeBehavior === 'REQUIRED' ? 'Required' : 'Guided'}</strong></span>
+            <span>•</span>
+            <span>Verification: <strong className="text-foreground">{defaultVerificationStrategy}</strong></span>
+          </div>
+        )}
+
+        {/* Expanded Progressive Disclosure Form */}
+        {showVideoSettings && (
+          <div className="pt-3 border-t border-border/60 space-y-4">
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">Workspace Type</label>
+                <Select
+                  value={workspaceType}
+                  onChange={(e) => setWorkspaceType(e.target.value as CodeAlongWorkspaceType)}
+                  options={[
+                    { label: 'Single-file workspace', value: 'SINGLE_FILE' },
+                    { label: 'Project workspace', value: 'MULTI_FILE' },
+                  ]}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">Language</label>
+                <Select
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value)}
+                  options={[
+                    { label: 'TypeScript / JavaScript', value: 'typescript' },
+                    { label: 'Python 3', value: 'python' },
+                    { label: 'Go', value: 'go' },
+                    { label: 'Rust', value: 'rust' },
+                    { label: 'C++', value: 'cpp' },
+                    { label: 'Java', value: 'java' },
+                  ]}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">Entry File</label>
+                <Input
+                  value={entryFile}
+                  onChange={(e) => setEntryFile(e.target.value)}
+                  placeholder="src/index.ts"
+                  className="font-mono text-xs"
+                />
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
+                <h4 className="text-xs font-semibold text-foreground">Practice Step Defaults</h4>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Default Verification</label>
+                    <Select
+                      value={defaultVerificationStrategy}
+                      onChange={(e) => setDefaultVerificationStrategy(e.target.value)}
+                      options={[
+                        { label: 'Auto (Recommended)', value: 'AUTO' },
+                        { label: 'AI Semantic', value: 'AI_SEMANTIC' },
+                        { label: 'Manual completion', value: 'NONE' },
+                        { label: 'File Compare', value: 'FILE_COMPARE' },
+                        { label: 'Structural', value: 'STRUCTURAL' },
+                        { label: 'Workspace Structure', value: 'WORKSPACE_STRUCTURE' },
+                        { label: 'Tests', value: 'TESTS' },
+                      ]}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Default Behavior</label>
+                    <Select
+                      value={defaultPracticeBehavior}
+                      onChange={(e) => setDefaultPracticeBehavior(e.target.value as VideoPracticeBehavior)}
+                      options={[
+                        { label: 'Required checkpoint', value: 'REQUIRED' },
+                        { label: 'Guided / Skippable', value: 'GUIDED' },
+                      ]}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
+                <h4 className="text-xs font-semibold text-foreground">Student Capabilities</h4>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <label className="flex items-center justify-between gap-1.5 rounded border border-border/60 bg-background px-2.5 py-1.5 font-medium">
+                    <span>Run code</span>
+                    <Switch checked={allowRun} onCheckedChange={setAllowRun} />
+                  </label>
+                  <label className="flex items-center justify-between gap-1.5 rounded border border-border/60 bg-background px-2.5 py-1.5 font-medium">
+                    <span>Submit/Judge</span>
+                    <Switch checked={allowJudge} onCheckedChange={setAllowJudge} />
+                  </label>
+                  <label className="flex items-center justify-between gap-1.5 rounded border border-border/60 bg-background px-2.5 py-1.5 font-medium">
+                    <span>Create files</span>
+                    <Switch checked={allowCreateFiles} onCheckedChange={setAllowCreateFiles} />
+                  </label>
+                  <label className="flex items-center justify-between gap-1.5 rounded border border-border/60 bg-background px-2.5 py-1.5 font-medium">
+                    <span>Create folders</span>
+                    <Switch checked={allowCreateFolders} onCheckedChange={setAllowCreateFolders} />
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button
+                size="sm"
+                isLoading={saveLessonConfigMutation.isPending}
+                onClick={() => saveLessonConfigMutation.mutate(enabled)}
+                className="text-xs"
+              >
+                <Save className="h-3.5 w-3.5 mr-1" />
+                <span>Save Video Settings</span>
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Timeline Milestones Section */}
+      {/* 2. TIMELINE MILESTONES SECTION */}
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
@@ -466,7 +750,7 @@ export function CodeAlongStudio({
           )}
         </div>
 
-        {/* Snapshot Editor (when active) */}
+        {/* Snapshot / Milestone Editor (when active) */}
         {isCreatingSnapshot && (
           <div className="rounded-xl border border-border/80 bg-card p-5 shadow-sm space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 pb-3">
@@ -490,7 +774,7 @@ export function CodeAlongStudio({
               </Button>
             </div>
 
-            {/* Metadata Controls */}
+            {/* Normal Authoring Fields: Timestamp & Title */}
             <div className="grid gap-3 sm:grid-cols-12 items-end">
               <div className="sm:col-span-4">
                 <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
@@ -529,66 +813,118 @@ export function CodeAlongStudio({
               </div>
             </div>
 
-            {/* Editor & File Management */}
-            <div className="space-y-3 pt-2">
-              <div className="rounded-lg border border-border/70 bg-muted/20 p-3">
-                <label className="flex items-center gap-2 text-xs font-semibold text-foreground">
-                  <Switch checked={practiceEnabled} onCheckedChange={setPracticeEnabled} />
-                  <ClipboardCheck className="h-3.5 w-3.5" />
-                  <span>Enable Practice Step</span>
-                </label>
-                {practiceEnabled ? (
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    <div className="sm:col-span-2">
-                      <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Instruction</label>
-                      <Input
-                        value={practiceInstruction}
-                        onChange={(event) => setPracticeInstruction(event.target.value)}
-                        placeholder="Implement the validation block"
-                        className="text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Verification</label>
-                      <Select
-                        value={practiceVerificationMode}
-                        onChange={(event) => setPracticeVerificationMode(event.target.value as typeof practiceVerificationMode)}
-                        options={[
-                          { label: 'None', value: 'NONE' },
-                          { label: 'File Compare', value: 'FILE_COMPARE' },
-                          { label: 'Structural', value: 'STRUCTURAL' },
-                          { label: 'Workspace Structure', value: 'WORKSPACE_STRUCTURE' },
-                          { label: 'Run Tests', value: 'TESTS' },
-                        ]}
-                      />
-                      {practiceVerificationMode === 'CODE_COMPARE' || practiceVerificationMode === 'FILE_COMPARE' ? (
-                        <p className="mt-1 text-[11px] text-muted-foreground">
-                          Reference snapshot: the instructor snapshot saved for this milestone.
-                        </p>
-                      ) : null}
-                      {practiceVerificationMode === 'STRUCTURAL' || practiceVerificationMode === 'WORKSPACE_STRUCTURE' ? (
-                        <p className="mt-1 text-[11px] text-muted-foreground">
-                          Initial rules are generated from the active file/snapshot and can be expanded later.
-                        </p>
-                      ) : null}
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Behavior</label>
-                      <Select
-                        value={practiceBehavior}
-                        onChange={(event) => setPracticeBehavior(event.target.value as typeof practiceBehavior)}
-                        options={[
-                          { label: 'Guided', value: 'GUIDED' },
-                          { label: 'Required', value: 'REQUIRED' },
-                        ]}
-                      />
-                    </div>
-                  </div>
-                ) : null}
+            {/* Summary preview badge */}
+            <div className="rounded-lg border border-border/70 bg-muted/20 p-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <ClipboardCheck className="h-4 w-4 text-primary" />
+                <span className="text-xs font-semibold text-foreground">
+                  Code Checkpoint
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  • {effectivePracticePreview.summary}
+                </span>
               </div>
 
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+                <span className="rounded bg-muted px-2 py-0.5">
+                  {effectivePracticePreview.behavior === 'REQUIRED' ? 'Required' : 'Guided'}
+                </span>
+                <span className="rounded bg-muted px-2 py-0.5">
+                  Verification: {effectivePracticePreview.verificationMode}
+                </span>
+              </div>
+            </div>
+
+            {/* Progressive Disclosure: Override this step ▾ */}
+            <div className="rounded-lg border border-border/60 bg-card">
+              <button
+                type="button"
+                onClick={() => setShowOverride((v) => !v)}
+                className="flex w-full items-center justify-between px-3 py-2 text-left text-xs font-semibold text-foreground hover:bg-muted/30"
+              >
+                <span>Override this step</span>
+                <div className="flex items-center gap-1 text-muted-foreground text-[11px]">
+                  <span>{isOverridden ? 'Custom override active' : 'Inherits video defaults'}</span>
+                  {showOverride ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                </div>
+              </button>
+
+              {showOverride && (
+                <div className="border-t border-border/60 p-3 space-y-3">
+                  <label className="flex items-center gap-2 text-xs font-medium text-foreground cursor-pointer">
+                    <Switch checked={isOverridden} onCheckedChange={setIsOverridden} />
+                    <span>Apply custom exception for this milestone</span>
+                  </label>
+
+                  {isOverridden && (
+                    <div className="grid gap-3 sm:grid-cols-2 pt-2 border-t border-border/40">
+                      <div>
+                        <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Verification Override</label>
+                        <Select
+                          value={overrideVerification}
+                          onChange={(e) => setOverrideVerification(e.target.value as VideoPracticeVerificationMode | 'INHERIT')}
+                          options={[
+                            { label: 'Inherit video defaults', value: 'INHERIT' },
+                            { label: 'AI Semantic', value: 'AI_SEMANTIC' },
+                            { label: 'Manual completion', value: 'NONE' },
+                            { label: 'File Compare', value: 'FILE_COMPARE' },
+                            { label: 'Structural', value: 'STRUCTURAL' },
+                            { label: 'Workspace Structure', value: 'WORKSPACE_STRUCTURE' },
+                            { label: 'Tests', value: 'TESTS' },
+                          ]}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Behavior Override</label>
+                        <Select
+                          value={overrideBehavior}
+                          onChange={(e) => setOverrideBehavior(e.target.value as VideoPracticeBehavior | 'INHERIT')}
+                          options={[
+                            { label: 'Inherit video defaults', value: 'INHERIT' },
+                            { label: 'Required checkpoint', value: 'REQUIRED' },
+                            { label: 'Guided / Skippable', value: 'GUIDED' },
+                          ]}
+                        />
+                      </div>
+
+                      {effectivePracticePreview.verificationMode !== 'NONE' && (
+                        <>
+                          <div>
+                            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Target File</label>
+                            <Input
+                              value={overrideTargetFile}
+                              onChange={(e) => setOverrideTargetFile(e.target.value)}
+                              placeholder={activeFilePath}
+                              className="font-mono text-xs"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Reference Snapshot</label>
+                            <Select
+                              value={overrideSnapshotId}
+                              onChange={(e) => setOverrideSnapshotId(e.target.value)}
+                              options={[
+                                { label: 'This milestone snapshot (Default)', value: '' },
+                                ...snapshots.map((s) => ({
+                                  label: `${formatTime(s.timestampSeconds)} - ${s.title || 'Snapshot'}`,
+                                  value: s.id,
+                                })),
+                              ]}
+                            />
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Code Editor & File Tabs */}
+            <div className="space-y-3 pt-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                {/* File pills */}
                 <div className="flex flex-wrap items-center gap-1.5">
                   {files.map((f) => (
                     <div
@@ -700,65 +1036,85 @@ export function CodeAlongStudio({
           </div>
         )}
 
-        {/* Lightweight Vertical Timeline */}
+        {/* 3. TIMELINE LIST */}
         <div className="relative pl-6 space-y-3 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-border/70">
-          {snapshots.map((snap) => (
-            <div
-              key={snap.id}
-              className="relative flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-card p-3.5 transition-all hover:border-border hover:shadow-2xs"
-            >
-              {/* Timeline Bullet */}
-              <div className="absolute -left-6 top-1/2 -translate-y-1/2 flex h-4 w-4 items-center justify-center rounded-full bg-background border-2 border-foreground/40" />
+          {snapshots.map((snap) => {
+            const matchingCp = checkpoints.find((c) => c.timestampSeconds === snap.timestampSeconds);
+            const hasPractice = Boolean(matchingCp?.practiceEnabled);
 
-              <div className="flex items-start sm:items-center gap-3">
-                <span className="font-mono text-xs font-semibold text-foreground bg-muted px-2 py-0.5 rounded-md shrink-0">
-                  {formatTime(snap.timestampSeconds)}
-                </span>
+            return (
+              <div
+                key={snap.id}
+                className="relative flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-card p-3.5 transition-all hover:border-border hover:shadow-2xs"
+              >
+                {/* Timeline Bullet */}
+                <div className="absolute -left-6 top-1/2 -translate-y-1/2 flex h-4 w-4 items-center justify-center rounded-full bg-background border-2 border-foreground/40" />
 
-                <div>
-                  <h5 className="text-xs sm:text-sm font-semibold text-foreground">
-                    {snap.title || `${snap.language} Snapshot`}
-                  </h5>
-                  <p className="text-[11px] font-mono text-muted-foreground mt-0.5">
-                    {snap.files.length} {snap.files.length === 1 ? 'file' : 'files'} · {snap.files.map((f) => f.path).join(', ')}
-                  </p>
+                <div className="flex items-start sm:items-center gap-3">
+                  <span className="font-mono text-xs font-semibold text-foreground bg-muted px-2 py-0.5 rounded-md shrink-0">
+                    {formatTime(snap.timestampSeconds)}
+                  </span>
+
+                  <div>
+                    <h5 className="text-xs sm:text-sm font-semibold text-foreground">
+                      {snap.title || `${snap.language} Snapshot`}
+                    </h5>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      {hasPractice ? (
+                        <>
+                          <span className="font-medium text-emerald-600 dark:text-emerald-400">Practice</span>
+                          {' · '}
+                          <span>{matchingCp?.required ? 'Required' : 'Guided'}</span>
+                          {' · '}
+                          <span>{matchingCp?.practiceConfigMode === 'MANUAL_OVERRIDE' && matchingCp.practiceVerificationMode ? `Override: ${matchingCp.practiceVerificationMode}` : 'Uses video defaults'}</span>
+                        </>
+                      ) : (
+                        <span>Follow only</span>
+                      )}
+                      {' · '}
+                      <span>{snap.files.length} {snap.files.length === 1 ? 'file' : 'files'}</span>
+                    </p>
+                    <p className="text-[11px] font-mono text-muted-foreground/80 mt-0.5">
+                      {snap.files.map((f) => f.path).join(', ')}
+                    </p>
+                  </div>
                 </div>
-              </div>
 
-              <div className="flex items-center gap-1">
-                {onSeekToSeconds ? (
+                <div className="flex items-center gap-1">
+                  {onSeekToSeconds ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => onSeekToSeconds(snap.timestampSeconds)}
+                      className="h-7 text-xs px-2.5"
+                    >
+                      <Play className="h-3 w-3 mr-1" />
+                      Jump
+                    </Button>
+                  ) : null}
                   <Button
                     size="sm"
-                    variant="secondary"
-                    onClick={() => onSeekToSeconds(snap.timestampSeconds)}
+                    variant="ghost"
+                    onClick={() => startEditingSnapshot(snap)}
                     className="h-7 text-xs px-2.5"
                   >
-                    <Play className="h-3 w-3 mr-1" />
-                    Jump
+                    <Edit2 className="h-3 w-3 mr-1" />
+                    Edit
                   </Button>
-                ) : null}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => startEditingSnapshot(snap)}
-                  className="h-7 text-xs px-2.5"
-                >
-                  <Edit2 className="h-3 w-3 mr-1" />
-                  Edit
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 text-xs px-2.5 text-destructive hover:bg-destructive/10"
-                  isLoading={deleteSnapshot.isPending && deleteSnapshot.variables === snap.id}
-                  onClick={() => deleteSnapshot.mutate(snap.id)}
-                >
-                  <Trash2 className="h-3 w-3 mr-1" />
-                  Delete
-                </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 text-xs px-2.5 text-destructive hover:bg-destructive/10"
+                    isLoading={deleteSnapshot.isPending && deleteSnapshot.variables === snap.id}
+                    onClick={() => deleteSnapshot.mutate(snap.id)}
+                  >
+                    <Trash2 className="h-3 w-3 mr-1" />
+                    Delete
+                  </Button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
 
           {snapshots.length === 0 && !isCreatingSnapshot && (
             <div className="py-8 text-center text-muted-foreground space-y-1">

@@ -18,6 +18,12 @@ export const workspaceFileSchema = z.object({
   content: z.string(),
 });
 
+export const practiceExampleSchema = z.object({
+  input: z.string().max(10_000),
+  output: z.string().max(10_000),
+  explanation: z.string().max(10_000).optional(),
+});
+
 export const instructorPracticeListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
@@ -45,10 +51,18 @@ export const createPracticeProblemSchema = z.object({
   title: z.string().trim().min(1).max(160),
   slug: z.string().trim().min(1).max(140).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(),
   description: z.string().trim().min(1).max(20_000),
+  inputFormat: z.string().trim().max(10_000).default(''),
+  outputFormat: z.string().trim().max(10_000).default(''),
+  constraints: z.string().trim().max(10_000).default(''),
+  examples: z.array(practiceExampleSchema).max(12).default([]),
+  explanation: z.string().trim().max(20_000).optional(),
   difficulty: z.nativeEnum(PracticeDifficulty),
   language: z.string().trim().min(1).max(40).default('javascript'),
   entryFile: z.string().trim().min(1).max(255).default('index.js'),
   starterFiles: z.array(workspaceFileSchema).min(1).default([{ path: 'index.js', content: '' }]),
+  referenceFiles: z.array(workspaceFileSchema).min(1).optional(),
+  executionContract: z.literal('FUNCTION').default('FUNCTION'),
+  comparisonPolicy: z.literal('NORMALIZED_TEXT').default('NORMALIZED_TEXT'),
   timeLimitMs: z.number().int().positive().optional(),
   memoryLimitMb: z.number().int().positive().optional(),
   passScore: z.number().min(0).max(100).optional(),
@@ -73,6 +87,12 @@ export const reorderPracticeTestCasesSchema = z.object({
   orderedIds: z.array(z.string().uuid()).min(1),
 });
 
+export const importPracticeTestCasesSchema = z.object({
+  version: z.literal(1),
+  mode: z.enum(['APPEND', 'REPLACE']).default('APPEND'),
+  testCases: z.array(practiceTestCaseInputSchema).min(1).max(100),
+});
+
 export type InstructorPracticeListQuery = z.infer<typeof instructorPracticeListQuerySchema>;
 export type StudentPracticeListQuery = z.infer<typeof studentPracticeListQuerySchema>;
 export type PracticeSubmissionListQuery = z.infer<typeof practiceSubmissionListQuerySchema>;
@@ -80,3 +100,4 @@ export type CreatePracticeProblemInput = z.infer<typeof createPracticeProblemSch
 export type UpdatePracticeProblemInput = z.infer<typeof updatePracticeProblemSchema>;
 export type PracticeTestCaseInput = z.infer<typeof practiceTestCaseInputSchema>;
 export type PracticeTestCaseUpdateInput = z.infer<typeof practiceTestCaseUpdateSchema>;
+export type ImportPracticeTestCasesInput = z.infer<typeof importPracticeTestCasesSchema>;

@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -11,7 +11,9 @@ import {
   Eye,
   EyeOff,
   FileCode,
-  AlertCircle
+  AlertCircle,
+  Save,
+  ShieldCheck,
 } from 'lucide-react';
 import Link from 'next/link';
 import { type InstructorPracticeProblem, requestJson } from '../../../../lib/api';
@@ -42,6 +44,13 @@ export default function InstructorPracticeDetailPage() {
   const [expectedOutput, setExpectedOutput] = useState('');
   const [weight, setWeight] = useState(10);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [description, setDescription] = useState('');
+  const [inputFormat, setInputFormat] = useState('');
+  const [outputFormat, setOutputFormat] = useState('');
+  const [constraints, setConstraints] = useState('');
+  const [starterCode, setStarterCode] = useState('');
+  const [referenceCode, setReferenceCode] = useState('');
+  const [importPayload, setImportPayload] = useState('{\n  "version": 1,\n  "mode": "APPEND",\n  "testCases": []\n}');
 
   const detail = useQuery({
     queryKey: ['instructor-practice', params.id],
@@ -50,10 +59,37 @@ export default function InstructorPracticeDetailPage() {
   });
 
   const problem = detail.data?.problem;
+  useEffect(() => {
+    if (!problem) return;
+    setDescription(problem.description);
+    setInputFormat(problem.inputFormat);
+    setOutputFormat(problem.outputFormat);
+    setConstraints(problem.constraints);
+    setStarterCode(problem.starterFiles[0]?.content ?? '');
+    setReferenceCode(problem.referenceFiles[0]?.content ?? '');
+  }, [problem?.id]);
+
   const refresh = async () => {
     setActionError(null);
     return queryClient.invalidateQueries({ queryKey: ['instructor-practice', params.id] });
   };
+
+  const updateProblem = useMutation({
+    mutationFn: () =>
+      requestJson(`/instructor/practice/problems/${params.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          description,
+          inputFormat,
+          outputFormat,
+          constraints,
+          starterFiles: [{ path: problem?.entryFile ?? 'index.js', content: starterCode }],
+          referenceFiles: [{ path: problem?.entryFile ?? 'index.js', content: referenceCode }],
+        }),
+      }),
+    onSuccess: refresh,
+    onError: (err: unknown) => setActionError(err instanceof Error ? err.message : 'Failed to update problem'),
+  });
 
   const addTest = useMutation({
     mutationFn: () =>
@@ -74,6 +110,29 @@ export default function InstructorPracticeDetailPage() {
     mutationFn: () => requestJson(`/instructor/practice/problems/${params.id}/publish`, { method: 'POST' }),
     onSuccess: refresh,
     onError: (err: unknown) => setActionError(err instanceof Error ? err.message : 'Failed to publish problem'),
+  });
+
+  const validate = useMutation({
+    mutationFn: () =>
+      requestJson<{
+        readonly valid: boolean;
+        readonly issues: readonly string[];
+      }>(`/instructor/practice/problems/${params.id}/validate`, { method: 'POST' }),
+    onSuccess: (data) => {
+      setActionError(data.valid ? null : data.issues.join('\n'));
+      void refresh();
+    },
+    onError: (err: unknown) => setActionError(err instanceof Error ? err.message : 'Failed to validate problem'),
+  });
+
+  const importTests = useMutation({
+    mutationFn: () =>
+      requestJson(`/instructor/practice/problems/${params.id}/test-cases/import`, {
+        method: 'POST',
+        body: importPayload,
+      }),
+    onSuccess: refresh,
+    onError: (err: unknown) => setActionError(err instanceof Error ? err.message : 'Failed to import tests'),
   });
 
   const archive = useMutation({
@@ -138,6 +197,15 @@ export default function InstructorPracticeDetailPage() {
                 {problem.status}
               </StatusBadge>
               {problem.status !== 'PUBLISHED' ? (
+                <>
+                <Button
+                  variant="outline"
+                  onClick={() => validate.mutate()}
+                  isLoading={validate.isPending}
+                  leftIcon={<ShieldCheck className="h-4 w-4" />}
+                >
+                  Validate
+                </Button>
                 <Button
                   onClick={() => publish.mutate()}
                   isLoading={publish.isPending}
@@ -145,6 +213,7 @@ export default function InstructorPracticeDetailPage() {
                 >
                   Publish Problem
                 </Button>
+                </>
               ) : null}
               {problem.status !== 'ARCHIVED' ? (
                 <Button
@@ -194,6 +263,12 @@ export default function InstructorPracticeDetailPage() {
                 <span className="text-muted-foreground">Passing Score</span>
                 <span className="font-semibold">{problem.passScore}%</span>
               </div>
+              <div className="flex items-center justify-between border-t pt-2">
+                <span className="text-muted-foreground">Validation</span>
+                <span className="font-semibold">
+                  {problem.validatedAt ? `Validated ${new Date(problem.validatedAt).toLocaleString()}` : 'Not validated'}
+                </span>
+              </div>
             </CardContent>
           </Card>
 
@@ -201,14 +276,52 @@ export default function InstructorPracticeDetailPage() {
             <CardHeader>
               <CardTitle className="text-base">Problem Statement</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="rounded-lg bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap leading-relaxed">
-                {problem.description}
-              </div>
+            <CardContent className="space-y-4">
+              {problem.status === 'DRAFT' ? (
+                <>
+                  <Textarea className="min-h-36 text-sm" value={description} onChange={(event) => setDescription(event.target.value)} />
+                  <Textarea className="min-h-24 text-sm" value={inputFormat} onChange={(event) => setInputFormat(event.target.value)} placeholder="Input format" />
+                  <Textarea className="min-h-24 text-sm" value={outputFormat} onChange={(event) => setOutputFormat(event.target.value)} placeholder="Output format" />
+                  <Textarea className="min-h-24 text-sm" value={constraints} onChange={(event) => setConstraints(event.target.value)} placeholder="Constraints" />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    isLoading={updateProblem.isPending}
+                    onClick={() => updateProblem.mutate()}
+                    leftIcon={<Save className="h-4 w-4" />}
+                  >
+                    Save Statement & Code
+                  </Button>
+                </>
+              ) : (
+                <div className="space-y-3">
+                  <div className="rounded-lg bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap leading-relaxed">{problem.description}</div>
+                  <div className="rounded-lg bg-muted/40 p-3 text-xs whitespace-pre-wrap"><strong>Input:</strong> {problem.inputFormat}</div>
+                  <div className="rounded-lg bg-muted/40 p-3 text-xs whitespace-pre-wrap"><strong>Output:</strong> {problem.outputFormat}</div>
+                  <div className="rounded-lg bg-muted/40 p-3 text-xs whitespace-pre-wrap"><strong>Constraints:</strong> {problem.constraints}</div>
+                </div>
+              )}
             </CardContent>
           </Card>
 
-          {problem.starterFiles?.length ? (
+          {problem.status === 'DRAFT' ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Starter & Reference Code</CardTitle>
+                <CardDescription>Both files use the current solution(input) JavaScript contract.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium text-foreground">Starter Code</label>
+                  <Textarea className="min-h-40 font-mono text-xs" value={starterCode} onChange={(event) => setStarterCode(event.target.value)} />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium text-foreground">Reference Solution</label>
+                  <Textarea className="min-h-40 font-mono text-xs" value={referenceCode} onChange={(event) => setReferenceCode(event.target.value)} />
+                </div>
+              </CardContent>
+            </Card>
+          ) : problem.starterFiles?.length ? (
             <Card>
               <CardHeader>
                 <div className="flex items-center gap-2">
@@ -281,13 +394,13 @@ export default function InstructorPracticeDetailPage() {
 
                       <div className="mt-3 grid gap-3 sm:grid-cols-2 text-xs">
                         <div>
-                          <span className="font-medium text-muted-foreground">Standard Input (stdin):</span>
+                          <span className="font-medium text-muted-foreground">Structured Input:</span>
                           <pre className="mt-1 max-h-24 overflow-auto rounded bg-muted p-2 font-mono text-foreground">
                             {test.input || '<empty>'}
                           </pre>
                         </div>
                         <div>
-                          <span className="font-medium text-muted-foreground">Expected Output (stdout):</span>
+                          <span className="font-medium text-muted-foreground">Expected Return:</span>
                           <pre className="mt-1 max-h-24 overflow-auto rounded bg-muted p-2 font-mono text-foreground">
                             {test.expectedOutput || '<empty>'}
                           </pre>
@@ -299,6 +412,30 @@ export default function InstructorPracticeDetailPage() {
               )}
             </CardContent>
           </Card>
+
+          {problem.status === 'DRAFT' ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Import Test Cases</CardTitle>
+                <CardDescription>Paste JSON with version, mode, and testCases. Use REPLACE to overwrite existing tests.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Textarea
+                  className="min-h-40 font-mono text-xs"
+                  value={importPayload}
+                  onChange={(event) => setImportPayload(event.target.value)}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  isLoading={importTests.isPending}
+                  onClick={() => importTests.mutate()}
+                >
+                  Import Tests
+                </Button>
+              </CardContent>
+            </Card>
+          ) : null}
 
           {/* Add Test Case Form */}
           <Card>
@@ -354,20 +491,20 @@ export default function InstructorPracticeDetailPage() {
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div>
-                    <label className="mb-1.5 block text-xs font-medium text-foreground">Standard Input (stdin)</label>
+                    <label className="mb-1.5 block text-xs font-medium text-foreground">Structured Input JSON</label>
                     <Textarea
                       className="min-h-24 font-mono text-xs"
-                      placeholder="Input passed to the solution process..."
+                      placeholder="JSON value passed to solution(input)..."
                       value={input}
                       onChange={(event) => setInput(event.target.value)}
                     />
                   </div>
                   <div>
-                    <label className="mb-1.5 block text-xs font-medium text-foreground">Expected Output (stdout)</label>
+                    <label className="mb-1.5 block text-xs font-medium text-foreground">Expected Return JSON</label>
                     <Textarea
                       required
                       className="min-h-24 font-mono text-xs"
-                      placeholder="Exact expected standard output..."
+                      placeholder="Expected JSON-serializable return value..."
                       value={expectedOutput}
                       onChange={(event) => setExpectedOutput(event.target.value)}
                     />

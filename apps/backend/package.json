@@ -12,11 +12,12 @@
     "prisma:generate": "if [ -f ../../.env ]; then set -a; . ../../.env; set +a; fi; prisma generate --schema prisma/schema.prisma",
     "db:migrate": "if [ -f ../../.env ]; then set -a; . ../../.env; set +a; fi; prisma migrate deploy --schema prisma/schema.prisma",
     "db:seed": "tsx prisma/seed.ts",
-    "seed:demo": "node --import tsx prisma/demo-seed.ts",
+    "seed:demo": "if [ -f ../../.env ]; then set -a; . ../../.env; set +a; fi; node --import tsx prisma/demo-seed.ts",
     "typecheck": "pnpm prisma:generate && tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@codesync/shared": "workspace:*",
+    "@google/genai": "^2.23.0",
     "@prisma/client": "^6.1.0",
     "amqplib": "^0.10.5",
     "argon2": "^0.41.1",
@@ -24,9 +25,10 @@
     "ioredis": "^5.4.2",
     "jsonwebtoken": "^9.0.2",
     "minio": "^8.0.3",
+    "pg": "^8.13.1",
     "pino": "^9.6.0",
     "pino-http": "^10.4.0",
-    "pg": "^8.13.1",
+    "xlsx": "^0.18.5",
     "zod": "^3.24.1"
   },
   "devDependencies": {

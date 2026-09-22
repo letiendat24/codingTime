@@ -3,6 +3,7 @@ import { CourseDifficulty, CourseStatus, LessonProgressStatus, LessonType, Prism
 import type { Express } from 'express';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import * as XLSX from 'xlsx';
 import { createApp } from '../../app';
 import type { Env } from '../../config';
 import { createLogger } from '../../shared/logger';
@@ -247,6 +248,51 @@ async function enroll(student: TestUser, courseId: string) {
     .expect(201);
 }
 
+function encodeJsonImport(payload: unknown) {
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
+}
+
+function encodeXlsxImport(rows: readonly Record<string, string | number>[]) {
+  const workbook = XLSX.utils.book_new();
+  const sheet = XLSX.utils.json_to_sheet([...rows], {
+    header: ['order', 'type', 'question', 'option_a', 'option_b', 'option_c', 'correct_answer', 'explanation', 'points'],
+  });
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Questions');
+  return (XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' }) as Buffer).toString('base64');
+}
+
+function validJsonImport() {
+  return {
+    version: 1,
+    questions: [
+      {
+        order: 1,
+        type: 'SINGLE_CHOICE',
+        question: 'Which keyword declares an immutable binding?',
+        options: [
+          { key: 'A', text: 'let' },
+          { key: 'B', text: 'const' },
+        ],
+        correctAnswer: 'B',
+        explanation: 'const prevents reassignment.',
+        points: 2,
+      },
+      {
+        order: 2,
+        type: 'MULTIPLE_CHOICE',
+        question: 'Which values are primitive JavaScript types?',
+        options: [
+          { key: 'A', text: 'string' },
+          { key: 'B', text: 'number' },
+          { key: 'C', text: 'Array' },
+        ],
+        correctAnswers: ['A', 'B'],
+        points: 3,
+      },
+    ],
+  };
+}
+
 describe('quiz assessment domain', () => {
   beforeAll(async () => {
     await prisma.$connect();
@@ -469,5 +515,181 @@ describe('quiz assessment domain', () => {
 
     expect(published.status).toBe(200);
     expect(published.body.course.status).toBe(CourseStatus.PUBLISHED);
+  });
+
+  it('previews and appends JSON quiz questions without committing during preview', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const { lessonId } = await createCourseWithQuiz(instructor.id, CourseStatus.DRAFT);
+    const quiz = await request(app)
+      .put(`/api/v1/instructor/lessons/${lessonId}/quiz`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({
+        title: 'Import Quiz',
+        instructions: null,
+        passScore: 70,
+        shuffleQuestions: false,
+        shuffleOptions: false,
+        showResultImmediately: true,
+      })
+      .expect(200);
+
+    const quizId = quiz.body.quiz.id as string;
+    const contentBase64 = encodeJsonImport(validJsonImport());
+    const preview = await request(app)
+      .post(`/api/v1/instructor/quizzes/${quizId}/questions/import-preview`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({ format: 'JSON', contentBase64 })
+      .expect(200);
+
+    expect(preview.body.summary).toEqual({ totalRows: 2, validRows: 2, invalidRows: 0 });
+    expect(preview.body.questions).toHaveLength(2);
+    expect(await prisma.quizQuestion.count({ where: { quizId } })).toBe(0);
+
+    const imported = await request(app)
+      .post(`/api/v1/instructor/quizzes/${quizId}/questions/import`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({ format: 'JSON', contentBase64, mode: 'APPEND' })
+      .expect(200);
+
+    expect(imported.body.quiz.questions).toHaveLength(2);
+    expect(imported.body.quiz.questions[0].options.some((option: { isCorrect: boolean }) => option.isCorrect)).toBe(true);
+    expect(await prisma.quizQuestion.count({ where: { quizId } })).toBe(2);
+  });
+
+  it('imports XLSX questions, reports row errors, and rejects malformed XLSX headers', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const { lessonId } = await createCourseWithQuiz(instructor.id, CourseStatus.DRAFT);
+    const quiz = await request(app)
+      .put(`/api/v1/instructor/lessons/${lessonId}/quiz`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({
+        title: 'XLSX Quiz',
+        instructions: null,
+        passScore: 70,
+        shuffleQuestions: false,
+        shuffleOptions: false,
+        showResultImmediately: true,
+      })
+      .expect(200);
+
+    const quizId = quiz.body.quiz.id as string;
+    const validXlsx = encodeXlsxImport([
+      {
+        order: 1,
+        type: 'SINGLE_CHOICE',
+        question: 'Pick the package manager.',
+        option_a: 'pnpm',
+        option_b: 'PostgreSQL',
+        correct_answer: 'A',
+        explanation: 'pnpm manages packages.',
+        points: 1,
+      },
+    ]);
+
+    await request(app)
+      .post(`/api/v1/instructor/quizzes/${quizId}/questions/import`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({ format: 'XLSX', contentBase64: validXlsx, mode: 'APPEND' })
+      .expect(200);
+
+    expect(await prisma.quizQuestion.count({ where: { quizId } })).toBe(1);
+
+    const invalidXlsx = encodeXlsxImport([
+      {
+        order: 1,
+        type: 'SINGLE_CHOICE',
+        question: 'Broken correct answer',
+        option_a: 'A',
+        option_b: 'B',
+        correct_answer: 'C',
+        points: 1,
+      },
+    ]);
+
+    const invalid = await request(app)
+      .post(`/api/v1/instructor/quizzes/${quizId}/questions/import-preview`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({ format: 'XLSX', contentBase64: invalidXlsx })
+      .expect(200);
+
+    expect(invalid.body.summary.invalidRows).toBe(1);
+    expect(invalid.body.errors[0].message).toContain('does not exist');
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([{ type: 'SINGLE_CHOICE' }]), 'Questions');
+    const malformed = (XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' }) as Buffer).toString('base64');
+
+    const rejected = await request(app)
+      .post(`/api/v1/instructor/quizzes/${quizId}/questions/import`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({ format: 'XLSX', contentBase64: malformed, mode: 'APPEND' });
+
+    expect(rejected.status).toBe(422);
+    expect(rejected.body.error.code).toBe('QUIZ_VALIDATION_FAILED');
+  });
+
+  it('exports quiz questions as JSON/XLSX and protects instructor-only answer keys', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const student = await createUser([RoleName.STUDENT]);
+    const otherInstructor = await createUser([RoleName.INSTRUCTOR]);
+    const { lessonId } = await createCourseWithQuiz(instructor.id);
+    const { quizId } = await createQuizWithQuestions(instructor, lessonId);
+
+    const deniedStudent = await request(app)
+      .get(`/api/v1/instructor/quizzes/${quizId}/questions/export?format=json`)
+      .set('Authorization', `Bearer ${student.token}`);
+    expect(deniedStudent.status).toBe(403);
+
+    const deniedOwner = await request(app)
+      .get(`/api/v1/instructor/quizzes/${quizId}/questions/export?format=json`)
+      .set('Authorization', `Bearer ${otherInstructor.token}`);
+    expect(deniedOwner.status).toBe(404);
+
+    const jsonExport = await request(app)
+      .get(`/api/v1/instructor/quizzes/${quizId}/questions/export?format=json`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .expect(200);
+
+    expect(jsonExport.headers['content-type']).toContain('application/json');
+    const exportedPayload = JSON.parse(jsonExport.text) as { readonly questions: readonly { readonly correctAnswers: readonly string[] }[] };
+    expect(exportedPayload.questions).toHaveLength(2);
+    expect(exportedPayload.questions[0]?.correctAnswers.length).toBeGreaterThan(0);
+
+    const xlsxExport = await request(app)
+      .get(`/api/v1/instructor/quizzes/${quizId}/questions/export?format=xlsx`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .expect(200);
+
+    expect(xlsxExport.headers['content-type']).toContain('spreadsheetml');
+    expect(Buffer.from(xlsxExport.body).length).toBeGreaterThan(100);
+  });
+
+  it('supports replace mode only before attempts exist', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const student = await createUser([RoleName.STUDENT]);
+    const { course, lessonId } = await createCourseWithQuiz(instructor.id);
+    const { quizId } = await createQuizWithQuestions(instructor, lessonId);
+    const contentBase64 = encodeJsonImport(validJsonImport());
+
+    const replaced = await request(app)
+      .post(`/api/v1/instructor/quizzes/${quizId}/questions/import`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({ format: 'JSON', contentBase64, mode: 'REPLACE' })
+      .expect(200);
+
+    expect(replaced.body.quiz.questions).toHaveLength(2);
+    await enroll(student, course.id);
+    await request(app)
+      .post(`/api/v1/learning/quizzes/${quizId}/attempts`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .expect(201);
+
+    const blocked = await request(app)
+      .post(`/api/v1/instructor/quizzes/${quizId}/questions/import`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({ format: 'JSON', contentBase64, mode: 'REPLACE' });
+
+    expect(blocked.status).toBe(422);
+    expect(blocked.body.error.details[0]).toContain('Cannot replace quiz questions');
   });
 });

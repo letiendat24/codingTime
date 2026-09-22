@@ -10,7 +10,29 @@ export function normalizeOutput(value: string) {
     .replace(/\n+$/g, '');
 }
 
+function normalizeJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeJson(item));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, normalizeJson(item)]),
+    );
+  }
+  return value;
+}
+
 export function outputsMatch(actual: string, expected: string) {
+  try {
+    const actualJson = JSON.parse(normalizeOutput(actual));
+    const expectedJson = JSON.parse(normalizeOutput(expected));
+    return JSON.stringify(normalizeJson(actualJson)) === JSON.stringify(normalizeJson(expectedJson));
+  } catch {
+    // Fall back to legacy normalized stdout comparison.
+  }
+
   return normalizeOutput(actual) === normalizeOutput(expected);
 }
 

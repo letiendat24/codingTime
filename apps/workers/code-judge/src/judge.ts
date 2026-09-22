@@ -30,6 +30,7 @@ export async function judgeSubmission(input: {
       entryFile: input.payload.entryFile,
       files: input.payload.files,
       stdin: testCase.input,
+      ...(input.payload.executionMode ? { executionMode: input.payload.executionMode } : {}),
       timeLimitMs: input.payload.timeLimitMs,
       memoryLimitMb: input.payload.memoryLimitMb,
       env: input.env,

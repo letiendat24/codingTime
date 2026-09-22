@@ -7,6 +7,7 @@ import {
   importSnapshotSchema,
   lessonIdParamSchema,
   revisionIdParamSchema,
+  runWorkspaceSchema,
   saveWorkspaceFilesSchema,
   workspaceIdParamSchema,
 } from './code-execution.schemas';
@@ -79,7 +80,8 @@ export class CodeExecutionController {
   runWorkspace = async (request: Request, response: Response) => {
     const auth = requireRequestAuth(request);
     const params = workspaceIdParamSchema.parse(request.params);
-    response.status(202).json(await this.codeExecution.runWorkspace(auth.userId, params.workspaceId, request.requestId));
+    const body = runWorkspaceSchema.parse(request.body ?? {});
+    response.status(202).json(await this.codeExecution.runWorkspace(auth.userId, params.workspaceId, request.requestId, body));
   };
 
   getExecution = async (request: Request, response: Response) => {

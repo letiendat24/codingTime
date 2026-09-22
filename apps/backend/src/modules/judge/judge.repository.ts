@@ -38,7 +38,10 @@ export class JudgeRepository {
     return this.prisma.videoCheckpoint.findFirst({
       where: {
         id: checkpointId,
-        type: VideoCheckpointType.CODING,
+        OR: [
+          { type: VideoCheckpointType.CODING },
+          { practiceEnabled: true },
+        ],
         videoAsset: { lesson: { module: { course: { ownerInstructorId: instructorId } } } },
       },
       include: {
@@ -192,6 +195,51 @@ export class JudgeRepository {
         files: { orderBy: { path: 'asc' } },
         practiceProblem: {
           include: { testCases: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] } },
+        },
+      },
+    });
+  }
+
+  async findVideoPracticeWorkspaceForSubmission(userId: string, checkpointId: string, workspaceId: string) {
+    return this.prisma.workspace.findFirst({
+      where: {
+        id: workspaceId,
+        userId,
+        lessonId: { not: null },
+        checkpointId: null,
+        practiceProblemId: null,
+        lesson: {
+          videoAsset: {
+            status: VideoAssetStatus.READY,
+            checkpoints: { some: { id: checkpointId, practiceEnabled: true } },
+          },
+          module: {
+            course: {
+              status: { in: [CourseStatus.PUBLISHED, CourseStatus.ARCHIVED] },
+              enrollments: { some: { studentId: userId, status: { not: EnrollmentStatus.CANCELLED } } },
+            },
+          },
+        },
+      },
+      include: {
+        files: { orderBy: { path: 'asc' } },
+        lesson: {
+          include: {
+            module: { include: { course: true } },
+            videoAsset: {
+              include: {
+                checkpoints: {
+                  where: { id: checkpointId, practiceEnabled: true },
+                  include: {
+                    codingConfig: {
+                      include: { testCases: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] } },
+                    },
+                  },
+                  take: 1,
+                },
+              },
+            },
+          },
         },
       },
     });

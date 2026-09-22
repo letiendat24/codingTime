@@ -3,6 +3,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { CodeExecutionFile } from '@codesync/shared';
 import type { CodeJudgeWorkerEnv } from './config';
+import { PRACTICE_FUNCTION_ADAPTER_PATH, PRACTICE_FUNCTION_ADAPTER_SOURCE } from './practice-function-adapter';
 import type { RuntimeDefinition } from './runtimes';
 
 export interface SandboxResult {
@@ -42,15 +43,23 @@ async function writeWorkspaceFiles(root: string, files: readonly CodeExecutionFi
   }
 }
 
+async function writePracticeFunctionAdapter(root: string) {
+  const target = join(root, PRACTICE_FUNCTION_ADAPTER_PATH);
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, PRACTICE_FUNCTION_ADAPTER_SOURCE, 'utf8');
+}
+
 export function buildDockerRunArgs(input: {
   readonly containerName: string;
   readonly workDirectory: string;
   readonly runtime: RuntimeDefinition;
   readonly entryFile: string;
+  readonly executionMode?: 'DIRECT' | 'FUNCTION';
   readonly timeLimitMs: number;
   readonly memoryLimitMb: number;
   readonly env: CodeJudgeWorkerEnv;
 }) {
+  const entryFile = input.executionMode === 'FUNCTION' ? PRACTICE_FUNCTION_ADAPTER_PATH : input.entryFile;
   return [
     'run',
     '--rm',
@@ -68,12 +77,14 @@ export function buildDockerRunArgs(input: {
     '--read-only',
     '--tmpfs',
     '/tmp:rw,noexec,nosuid,size=16m',
+    '--env',
+    `CODESYNC_ENTRY_FILE=${input.entryFile}`,
     '--workdir',
     '/workspace',
     '--volume',
     `${input.workDirectory}:/workspace:ro`,
     input.runtime.image,
-    ...input.runtime.command(input.entryFile),
+    ...input.runtime.command(entryFile),
   ];
 }
 
@@ -84,6 +95,7 @@ export async function runInDockerSandbox(input: {
   readonly entryFile: string;
   readonly files: readonly CodeExecutionFile[];
   readonly stdin: string;
+  readonly executionMode?: 'DIRECT' | 'FUNCTION';
   readonly timeLimitMs: number;
   readonly memoryLimitMb: number;
   readonly env: CodeJudgeWorkerEnv;
@@ -98,12 +110,16 @@ export async function runInDockerSandbox(input: {
 
   await mkdir(workDirectory, { recursive: true });
   await writeWorkspaceFiles(workDirectory, input.files);
+  if (input.executionMode === 'FUNCTION') {
+    await writePracticeFunctionAdapter(workDirectory);
+  }
 
   const dockerArgs = buildDockerRunArgs({
     containerName,
     workDirectory,
     runtime: input.runtime,
     entryFile: input.entryFile,
+    ...(input.executionMode ? { executionMode: input.executionMode } : {}),
     timeLimitMs: input.timeLimitMs,
     memoryLimitMb: input.memoryLimitMb,
     env: input.env,

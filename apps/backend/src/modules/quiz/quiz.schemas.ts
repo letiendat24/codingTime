@@ -50,6 +50,21 @@ export const reorderQuizQuestionsSchema = z.object({
   orderedIds: z.array(z.string().uuid()).min(1),
 });
 
+export const quizImportFormatSchema = z.enum(['JSON', 'XLSX']);
+
+export const quizQuestionImportPreviewSchema = z.object({
+  format: quizImportFormatSchema,
+  contentBase64: z.string().min(1),
+});
+
+export const quizQuestionImportSchema = quizQuestionImportPreviewSchema.extend({
+  mode: z.enum(['APPEND', 'REPLACE']).default('APPEND'),
+});
+
+export const quizQuestionExportQuerySchema = z.object({
+  format: z.enum(['json', 'xlsx', 'JSON', 'XLSX']).default('xlsx'),
+});
+
 export const submitQuizAttemptSchema = z.object({
   answers: z.array(
     z.object({
@@ -62,4 +77,6 @@ export const submitQuizAttemptSchema = z.object({
 export type UpsertQuizInput = z.infer<typeof upsertQuizSchema>;
 export type QuizQuestionInput = z.infer<typeof quizQuestionInputSchema>;
 export type UpdateQuizQuestionInput = z.infer<typeof updateQuizQuestionSchema>;
+export type QuizQuestionImportPreviewInput = z.infer<typeof quizQuestionImportPreviewSchema>;
+export type QuizQuestionImportInput = z.infer<typeof quizQuestionImportSchema>;
 export type SubmitQuizAttemptInput = z.infer<typeof submitQuizAttemptSchema>;

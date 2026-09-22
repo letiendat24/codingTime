@@ -1,4 +1,5 @@
 import type { CheckpointProgressStatus, VideoCheckpointType, VideoPracticeBehavior, VideoPracticeVerificationMode, VideoWorkspaceType } from '@prisma/client';
+import type { CodeAlongConfigSource, GeneratedPracticeRule } from '@codesync/shared';
 
 export interface VideoProgressState {
   readonly lastPositionSeconds: number;
@@ -17,6 +18,7 @@ export interface StudentCheckpoint {
   readonly pauseVideo: boolean;
   readonly completed: boolean;
   readonly practiceEnabled: boolean;
+  readonly practiceConfigMode: CodeAlongConfigSource;
   readonly practiceVerificationMode: VideoPracticeVerificationMode;
   readonly practiceBehavior: VideoPracticeBehavior;
   readonly practiceSnapshotId: string | null;
@@ -47,6 +49,8 @@ export interface CodeAlongConfigResponse {
   readonly entryFile: string | null;
   readonly workspaceType: VideoWorkspaceType;
   readonly capabilities: VideoWorkspaceCapabilities;
+  readonly defaultPracticeBehavior: VideoPracticeBehavior;
+  readonly defaultVerificationStrategy: string;
 }
 
 export interface StudentCodeAlongResponse extends CodeAlongConfigResponse {
@@ -69,6 +73,19 @@ export interface VideoProgressResponse extends VideoProgressState {
   readonly lessonCompleted: boolean;
 }
 
+export interface InstructorCheckpointPracticeResponse {
+  readonly configMode: CodeAlongConfigSource;
+  readonly practiceEnabled: boolean;
+  readonly behavior: VideoPracticeBehavior;
+  readonly verificationMode: VideoPracticeVerificationMode;
+  readonly workspaceType: VideoWorkspaceType;
+  readonly capabilities: VideoWorkspaceCapabilities;
+  readonly targetFiles: readonly string[];
+  readonly generatedRules: readonly GeneratedPracticeRule[];
+  readonly summary: string;
+  readonly reason: string;
+}
+
 export interface InstructorCheckpointResponse {
   readonly id: string;
   readonly videoAssetId: string | null;
@@ -81,12 +98,14 @@ export interface InstructorCheckpointResponse {
   readonly pauseVideo: boolean;
   readonly position: number;
   readonly practiceEnabled: boolean;
+  readonly practiceConfigMode: CodeAlongConfigSource;
   readonly practiceVerificationMode: VideoPracticeVerificationMode;
   readonly practiceBehavior: VideoPracticeBehavior;
   readonly practiceSnapshotId: string | null;
   readonly practiceTargetFilePath: string | null;
   readonly practiceTargetStartLine: number | null;
   readonly practiceTargetEndLine: number | null;
+  readonly practice?: InstructorCheckpointPracticeResponse | undefined;
 }
 
 export interface CheckpointCompletionResponse {
@@ -138,5 +157,15 @@ export interface PracticeStepCompletionResponse {
     readonly status: PracticeVerificationStatus;
     readonly verificationMode: VideoPracticeVerificationMode;
     readonly details: readonly string[];
+    readonly summary?: string;
+    readonly guidance?: string | null;
+    readonly requirements?: readonly {
+      readonly label: string;
+      readonly status: 'PASS' | 'NEEDS_FIX' | 'UNKNOWN';
+      readonly feedback: string;
+    }[];
+    readonly attemptId?: string | null;
+    readonly cached?: boolean;
+    readonly stale?: boolean;
   };
 }

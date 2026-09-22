@@ -3,6 +3,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { CodeExecutionFile } from '@codesync/shared';
 import type { CodeExecutionWorkerEnv } from './config';
+import { PRACTICE_FUNCTION_ADAPTER_PATH, PRACTICE_FUNCTION_ADAPTER_SOURCE } from './practice-function-adapter';
 import type { RuntimeDefinition } from './runtimes';
 
 export interface SandboxResult {
@@ -42,16 +43,25 @@ async function writeWorkspaceFiles(root: string, files: readonly CodeExecutionFi
   }
 }
 
+async function writePracticeFunctionAdapter(root: string) {
+  const target = join(root, PRACTICE_FUNCTION_ADAPTER_PATH);
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, PRACTICE_FUNCTION_ADAPTER_SOURCE, 'utf8');
+}
+
 export function buildDockerRunArgs(input: {
   readonly containerName: string;
   readonly workDirectory: string;
   readonly runtime: RuntimeDefinition;
   readonly entryFile: string;
+  readonly executionMode?: 'DIRECT' | 'FUNCTION';
   readonly env: CodeExecutionWorkerEnv;
 }) {
+  const entryFile = input.executionMode === 'FUNCTION' ? PRACTICE_FUNCTION_ADAPTER_PATH : input.entryFile;
   return [
     'run',
     '--rm',
+    '--interactive',
     '--name',
     input.containerName,
     '--network',
@@ -65,12 +75,14 @@ export function buildDockerRunArgs(input: {
     '--read-only',
     '--tmpfs',
     '/tmp:rw,noexec,nosuid,size=16m',
+    '--env',
+    `CODESYNC_ENTRY_FILE=${input.entryFile}`,
     '--workdir',
     '/workspace',
     '--volume',
     `${input.workDirectory}:/workspace:ro`,
     input.runtime.image,
-    ...input.runtime.command(input.entryFile),
+    ...input.runtime.command(entryFile),
   ];
 }
 
@@ -80,6 +92,8 @@ export async function runInDockerSandbox(input: {
   readonly runtime: RuntimeDefinition;
   readonly entryFile: string;
   readonly files: readonly CodeExecutionFile[];
+  readonly executionMode?: 'DIRECT' | 'FUNCTION';
+  readonly stdin?: string;
   readonly env: CodeExecutionWorkerEnv;
 }): Promise<SandboxResult> {
   const workDirectory = join(input.env.CODE_EXECUTION_TEMP_ROOT, input.jobId);
@@ -92,31 +106,38 @@ export async function runInDockerSandbox(input: {
 
   await mkdir(workDirectory, { recursive: true });
   await writeWorkspaceFiles(workDirectory, input.files);
+  if (input.executionMode === 'FUNCTION') {
+    await writePracticeFunctionAdapter(workDirectory);
+  }
 
   const dockerArgs = buildDockerRunArgs({
     containerName,
     workDirectory,
     runtime: input.runtime,
     entryFile: input.entryFile,
+    ...(input.executionMode ? { executionMode: input.executionMode } : {}),
     env: input.env,
   });
 
   try {
     return await new Promise<SandboxResult>((resolve, reject) => {
-      const child = spawn('docker', dockerArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn('docker', dockerArgs, { stdio: [input.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
       const timeout = setTimeout(() => {
         timedOut = true;
         spawn('docker', ['rm', '-f', containerName], { stdio: 'ignore' });
       }, input.env.CODE_EXECUTION_TIMEOUT_MS);
 
       timeout.unref();
+      if (child.stdin) {
+        child.stdin.end(input.stdin ?? '');
+      }
 
-      child.stdout.on('data', (chunk: Buffer) => {
+      child.stdout!.on('data', (chunk: Buffer) => {
         const result = appendBounded(stdout, chunk, input.env.CODE_EXECUTION_MAX_OUTPUT_BYTES - Buffer.byteLength(stderr, 'utf8'));
         stdout = result.value;
         outputTruncated = outputTruncated || result.truncated;
       });
-      child.stderr.on('data', (chunk: Buffer) => {
+      child.stderr!.on('data', (chunk: Buffer) => {
         const result = appendBounded(stderr, chunk, input.env.CODE_EXECUTION_MAX_OUTPUT_BYTES - Buffer.byteLength(stdout, 'utf8'));
         stderr = result.value;
         outputTruncated = outputTruncated || result.truncated;

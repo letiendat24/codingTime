@@ -6,6 +6,7 @@ import {
   ExecutionStatus,
   LessonType,
   RoleName,
+  TestCaseVisibility,
   VideoAssetStatus,
   VideoCheckpointType,
   type PrismaClient,
@@ -129,6 +130,11 @@ async function clearData() {
   await prisma.executionRequest.deleteMany();
   await prisma.workspaceFile.deleteMany();
   await prisma.workspace.deleteMany();
+  await prisma.practiceProgress.deleteMany();
+  await prisma.practiceProblemTestCase.deleteMany();
+  await prisma.practiceProblemTag.deleteMany();
+  await prisma.practiceProblem.deleteMany();
+  await prisma.practiceTag.deleteMany();
   await prisma.codingCheckpointConfig.deleteMany();
   await prisma.checkpointProgress.deleteMany();
   await prisma.videoProgress.deleteMany();
@@ -412,6 +418,385 @@ describe('code execution integration', () => {
     expect(publishedMessages[0]?.payload.files[0]?.content).toContain('first');
     expect(publishedMessages[0]?.payload.files[0]?.content).not.toContain('second');
     expect(rateLimited.status).toBe(429);
+  });
+
+  it('recovers stale executions before enforcing the active execution limit', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const student = await createUser([RoleName.STUDENT]);
+    const { checkpoint } = await seedVideoCheckpoint({ instructorId: instructor.id, studentId: student.id, type: VideoCheckpointType.CODING });
+    const opened = await request(app)
+      .post(`/api/v1/learning/checkpoints/${checkpoint.id}/workspace`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send();
+    const staleQueuedAt = new Date(Date.now() - 60_000);
+    const staleRunningAt = new Date(Date.now() - 60_000);
+
+    await prisma.executionRequest.create({
+      data: {
+        workspaceId: opened.body.workspace.id,
+        userId: student.id,
+        language: 'javascript',
+        entryFile: 'index.js',
+        filesSnapshotJson: { files: [{ path: 'index.js', content: 'console.log("stale queued");' }] },
+        status: ExecutionStatus.QUEUED,
+        jobId: randomUUID(),
+        idempotencyKey: randomUUID(),
+        correlationId: randomUUID(),
+        queuedAt: staleQueuedAt,
+        createdAt: staleQueuedAt,
+      },
+    });
+    const staleRunning = await prisma.executionRequest.create({
+      data: {
+        workspaceId: opened.body.workspace.id,
+        userId: student.id,
+        language: 'javascript',
+        entryFile: 'index.js',
+        filesSnapshotJson: { files: [{ path: 'index.js', content: 'console.log("stale running");' }] },
+        status: ExecutionStatus.RUNNING,
+        jobId: randomUUID(),
+        idempotencyKey: randomUUID(),
+        correlationId: randomUUID(),
+        queuedAt: staleRunningAt,
+        startedAt: staleRunningAt,
+        createdAt: staleRunningAt,
+      },
+    });
+
+    const queued = await request(app)
+      .post(`/api/v1/workspaces/${opened.body.workspace.id}/executions`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send();
+
+    const activeCount = await prisma.executionRequest.count({
+      where: { userId: student.id, status: { in: [ExecutionStatus.QUEUED, ExecutionStatus.RUNNING] } },
+    });
+    const recovered = await prisma.executionRequest.findMany({
+      where: { userId: student.id, id: { not: queued.body.id } },
+      include: { result: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    expect(queued.status).toBe(202);
+    expect(activeCount).toBe(1);
+    expect(recovered.map((item) => item.status).sort()).toEqual([ExecutionStatus.FAILED, ExecutionStatus.TIMED_OUT]);
+    expect(recovered.find((item) => item.id === staleRunning.id)?.result?.errorCode).toBe('EXECUTION_STALE_RUNNING');
+  });
+
+  it('keeps active execution limiting scoped to the authenticated user', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const student = await createUser([RoleName.STUDENT]);
+    const otherStudent = await createUser([RoleName.STUDENT]);
+    const { checkpoint } = await seedVideoCheckpoint({ instructorId: instructor.id, studentId: student.id, type: VideoCheckpointType.CODING });
+    const opened = await request(app)
+      .post(`/api/v1/learning/checkpoints/${checkpoint.id}/workspace`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send();
+
+    for (let index = 0; index < testEnv.CODE_EXECUTION_MAX_ACTIVE_PER_USER; index += 1) {
+      await prisma.executionRequest.create({
+        data: {
+          workspaceId: opened.body.workspace.id,
+          userId: otherStudent.id,
+          language: 'javascript',
+          entryFile: 'index.js',
+          filesSnapshotJson: { files: [{ path: 'index.js', content: 'console.log("other");' }] },
+          status: ExecutionStatus.QUEUED,
+          jobId: randomUUID(),
+          idempotencyKey: randomUUID(),
+          correlationId: randomUUID(),
+        },
+      });
+    }
+
+    const queued = await request(app)
+      .post(`/api/v1/workspaces/${opened.body.workspace.id}/executions`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send();
+
+    expect(queued.status).toBe(202);
+  });
+
+  it('still blocks genuinely active executions for the same user', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const student = await createUser([RoleName.STUDENT]);
+    const { checkpoint } = await seedVideoCheckpoint({ instructorId: instructor.id, studentId: student.id, type: VideoCheckpointType.CODING });
+    const opened = await request(app)
+      .post(`/api/v1/learning/checkpoints/${checkpoint.id}/workspace`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send();
+
+    for (let index = 0; index < testEnv.CODE_EXECUTION_MAX_ACTIVE_PER_USER; index += 1) {
+      await prisma.executionRequest.create({
+        data: {
+          workspaceId: opened.body.workspace.id,
+          userId: student.id,
+          language: 'javascript',
+          entryFile: 'index.js',
+          filesSnapshotJson: { files: [{ path: 'index.js', content: 'console.log("active");' }] },
+          status: index === 0 ? ExecutionStatus.QUEUED : ExecutionStatus.RUNNING,
+          startedAt: index === 0 ? null : new Date(),
+          jobId: randomUUID(),
+          idempotencyKey: randomUUID(),
+          correlationId: randomUUID(),
+        },
+      });
+    }
+
+    const blocked = await request(app)
+      .post(`/api/v1/workspaces/${opened.body.workspace.id}/executions`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send();
+
+    expect(blocked.status).toBe(429);
+    expect(blocked.body.error.code).toBe('EXECUTION_ACTIVE_LIMIT_EXCEEDED');
+  });
+
+  it('runs practice workspaces through the function adapter contract using the first public sample by default', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const student = await createUser([RoleName.STUDENT]);
+    const problem = await prisma.practiceProblem.create({
+      data: {
+        createdByUserId: instructor.id,
+        title: 'Two Sum Function Run',
+        slug: `two-sum-run-${randomUUID()}`,
+        description: 'Return two indices.',
+        inputFormat: 'solution(input) receives nums and target.',
+        outputFormat: 'Return the two indices.',
+        constraints: 'Exactly one answer exists.',
+        difficulty: 'EASY',
+        status: 'PUBLISHED',
+        language: 'javascript',
+        entryFile: 'index.js',
+        starterFilesJson: { files: [{ path: 'index.js', content: 'function solution(input) {\n  return [];\n}\n\nmodule.exports = { solution };\n' }] },
+        executionContract: 'FUNCTION',
+        comparisonPolicy: 'NORMALIZED_TEXT',
+        testCases: {
+          create: [
+            {
+              name: 'Sample 1',
+              visibility: TestCaseVisibility.PUBLIC,
+              input: '{"nums":[2,7,11,15],"target":9}',
+              expectedOutput: '[0,1]',
+              weight: 50,
+              position: 1,
+            },
+            {
+              name: 'Sample 2',
+              visibility: TestCaseVisibility.PUBLIC,
+              input: '{"nums":[3,2,4],"target":6}',
+              expectedOutput: '[1,2]',
+              weight: 50,
+              position: 2,
+            },
+          ],
+        },
+      },
+    });
+    const workspace = await prisma.workspace.create({
+      data: {
+        userId: student.id,
+        practiceProblemId: problem.id,
+        language: 'javascript',
+        entryFile: 'index.js',
+        files: {
+          create: [{
+            path: 'index.js',
+            content: 'function solution(input) {\n  return [0, 1];\n}\n\nmodule.exports = { solution };\n',
+          }],
+        },
+      },
+    });
+
+    const queued = await request(app)
+      .post(`/api/v1/workspaces/${workspace.id}/executions`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send();
+
+    expect(queued.status).toBe(202);
+    expect(publishedMessages).toHaveLength(1);
+    expect(publishedMessages[0]?.payload.executionMode).toBe('FUNCTION');
+    expect(publishedMessages[0]?.payload.stdin).toBe('{"nums":[2,7,11,15],"target":9}');
+    expect(publishedMessages[0]?.payload.files[0]?.content).not.toContain('readFileSync');
+  });
+
+  it('runs a selected public practice sample when publicTestCaseId is provided', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const student = await createUser([RoleName.STUDENT]);
+    const problem = await prisma.practiceProblem.create({
+      data: {
+        createdByUserId: instructor.id,
+        title: 'Selected Sample Run',
+        slug: `selected-sample-run-${randomUUID()}`,
+        description: 'Return two indices.',
+        inputFormat: 'solution(input) receives nums and target.',
+        outputFormat: 'Return the two indices.',
+        constraints: 'Exactly one answer exists.',
+        difficulty: 'EASY',
+        status: 'PUBLISHED',
+        language: 'javascript',
+        entryFile: 'index.js',
+        starterFilesJson: { files: [{ path: 'index.js', content: 'function solution(input) {\n  return [];\n}\n\nmodule.exports = { solution };\n' }] },
+        executionContract: 'FUNCTION',
+        comparisonPolicy: 'NORMALIZED_TEXT',
+        testCases: {
+          create: [
+            {
+              name: 'Sample 1',
+              visibility: TestCaseVisibility.PUBLIC,
+              input: '{"nums":[2,7,11,15],"target":9}',
+              expectedOutput: '[0,1]',
+              weight: 50,
+              position: 1,
+            },
+            {
+              name: 'Sample 2',
+              visibility: TestCaseVisibility.PUBLIC,
+              input: '{"nums":[3,2,4],"target":6}',
+              expectedOutput: '[1,2]',
+              weight: 50,
+              position: 2,
+            },
+            {
+              name: 'Hidden',
+              visibility: TestCaseVisibility.HIDDEN,
+              input: '{"nums":[3,3],"target":6}',
+              expectedOutput: '[0,1]',
+              weight: 50,
+              position: 3,
+            },
+          ],
+        },
+      },
+      include: { testCases: { orderBy: { position: 'asc' } } },
+    });
+    const sample2 = problem.testCases.find((test) => test.name === 'Sample 2');
+    const workspace = await prisma.workspace.create({
+      data: {
+        userId: student.id,
+        practiceProblemId: problem.id,
+        language: 'javascript',
+        entryFile: 'index.js',
+        files: {
+          create: [{
+            path: 'index.js',
+            content: 'function solution(input) {\n  return [1, 2];\n}\n\nmodule.exports = { solution };\n',
+          }],
+        },
+      },
+    });
+
+    const queued = await request(app)
+      .post(`/api/v1/workspaces/${workspace.id}/executions`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send({ publicTestCaseId: sample2?.id });
+
+    expect(queued.status).toBe(202);
+    expect(publishedMessages[0]?.payload.executionMode).toBe('FUNCTION');
+    expect(publishedMessages[0]?.payload.stdin).toBe('{"nums":[3,2,4],"target":6}');
+    expect(JSON.stringify(publishedMessages[0]?.payload)).not.toContain('{"nums":[3,3],"target":6}');
+  });
+
+  it('preserves explicit null custom practice input instead of treating it as missing', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const student = await createUser([RoleName.STUDENT]);
+    const problem = await prisma.practiceProblem.create({
+      data: {
+        createdByUserId: instructor.id,
+        title: 'Null Input Run',
+        slug: `null-input-run-${randomUUID()}`,
+        description: 'Return null.',
+        inputFormat: 'solution(input) receives null.',
+        outputFormat: 'Return null.',
+        constraints: 'Input may be null.',
+        difficulty: 'EASY',
+        status: 'PUBLISHED',
+        language: 'javascript',
+        entryFile: 'index.js',
+        starterFilesJson: { files: [{ path: 'index.js', content: 'module.exports = { solution: (input) => input };' }] },
+        executionContract: 'FUNCTION',
+        comparisonPolicy: 'NORMALIZED_TEXT',
+        testCases: {
+          create: [{
+            name: 'Null sample',
+            visibility: TestCaseVisibility.PUBLIC,
+            input: 'null',
+            expectedOutput: 'null',
+            weight: 100,
+            position: 1,
+          }],
+        },
+      },
+    });
+    const workspace = await prisma.workspace.create({
+      data: {
+        userId: student.id,
+        practiceProblemId: problem.id,
+        language: 'javascript',
+        entryFile: 'index.js',
+        files: { create: [{ path: 'index.js', content: 'module.exports = { solution: (input) => input };' }] },
+      },
+    });
+
+    const queued = await request(app)
+      .post(`/api/v1/workspaces/${workspace.id}/executions`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send({ input: null });
+
+    expect(queued.status).toBe(202);
+    expect(publishedMessages[0]?.payload.executionMode).toBe('FUNCTION');
+    expect(publishedMessages[0]?.payload.stdin).toBe('null');
+  });
+
+  it('rejects practice run when no public sample exists', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const student = await createUser([RoleName.STUDENT]);
+    const problem = await prisma.practiceProblem.create({
+      data: {
+        createdByUserId: instructor.id,
+        title: 'No Public Sample Run',
+        slug: `no-public-sample-run-${randomUUID()}`,
+        description: 'Hidden only.',
+        inputFormat: 'solution(input) receives hidden input.',
+        outputFormat: 'Return answer.',
+        constraints: 'Hidden only.',
+        difficulty: 'EASY',
+        status: 'PUBLISHED',
+        language: 'javascript',
+        entryFile: 'index.js',
+        starterFilesJson: { files: [{ path: 'index.js', content: 'module.exports = { solution: () => 1 };' }] },
+        executionContract: 'FUNCTION',
+        comparisonPolicy: 'NORMALIZED_TEXT',
+        testCases: {
+          create: [{
+            name: 'Hidden',
+            visibility: TestCaseVisibility.HIDDEN,
+            input: '{"secret":true}',
+            expectedOutput: '1',
+            weight: 100,
+            position: 1,
+          }],
+        },
+      },
+    });
+    const workspace = await prisma.workspace.create({
+      data: {
+        userId: student.id,
+        practiceProblemId: problem.id,
+        language: 'javascript',
+        entryFile: 'index.js',
+        files: { create: [{ path: 'index.js', content: 'module.exports = { solution: () => 1 };' }] },
+      },
+    });
+
+    const blocked = await request(app)
+      .post(`/api/v1/workspaces/${workspace.id}/executions`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send();
+
+    expect(blocked.status).toBe(422);
+    expect(blocked.body.error.code).toBe('PRACTICE_RUN_SAMPLE_UNAVAILABLE');
+    expect(publishedMessages).toHaveLength(0);
   });
 
   it('persists execution results idempotently and exposes detail/history only to the owner', async () => {

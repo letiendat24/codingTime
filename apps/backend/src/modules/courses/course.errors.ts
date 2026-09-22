@@ -20,12 +20,23 @@ export function courseNotEditable() {
   return new HttpError(409, 'COURSE_NOT_EDITABLE', 'Only draft courses can be edited in this phase');
 }
 
-export function courseNotReadyForPublish(details: readonly string[]) {
+export interface CoursePublishIssue {
+  readonly type: string;
+  readonly severity: 'ERROR' | 'WARNING' | 'INFO';
+  readonly lessonId?: string;
+  readonly checkpointId?: string;
+  readonly checkpointTitle?: string;
+  readonly message: string;
+  readonly fix: string;
+}
+
+export function courseNotReadyForPublish(details: readonly string[], issues?: readonly CoursePublishIssue[]) {
   return new HttpError(
     422,
     'COURSE_NOT_READY_FOR_PUBLISH',
     'Course is missing required content',
     details,
+    issues,
   );
 }
 

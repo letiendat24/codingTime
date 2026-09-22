@@ -1,4 +1,4 @@
-import type { VideoPracticeStep, WorkspaceCapabilities, WorkspaceFile } from '../../../lib/api';
+import type { PracticeStepCompletion, VideoPracticeStep, WorkspaceCapabilities, WorkspaceFile } from '../../../lib/api';
 import type { CodeSnapshotMetadata } from '../../../lib/api';
 import { selectSnapshotAtOrBefore } from '../../../lib/video-learning';
 
@@ -88,6 +88,82 @@ export function findBlockingPracticeSeekStep(
   return candidates[0] ?? null;
 }
 
+export function findEarliestIncompletePracticeStepAtOrBefore(
+  currentTimeMs: number,
+  steps: readonly VideoPracticeStep[],
+): VideoPracticeStep | null {
+  const candidates = steps
+    .filter((step) =>
+      !step.completed
+      && step.status !== 'COMPLETED'
+      && step.status !== 'SKIPPED')
+    .filter((step) => {
+      const timestampMs = step.timestampMs ?? step.timestampSeconds * 1000;
+      return timestampMs <= currentTimeMs;
+    })
+    .sort((a, b) => {
+      const left = a.timestampMs ?? a.timestampSeconds * 1000;
+      const right = b.timestampMs ?? b.timestampSeconds * 1000;
+      return left - right;
+    });
+
+  return candidates[0] ?? null;
+}
+
+export function watchedPracticeSeekTarget(input: {
+  readonly mode: VideoLearningMode;
+  readonly requestedSeconds: number;
+  readonly furthestWatchedSeconds: number;
+}): number {
+  if (input.mode !== 'PRACTICE') {
+    return input.requestedSeconds;
+  }
+
+  return Math.min(input.requestedSeconds, Math.max(0, input.furthestWatchedSeconds));
+}
+
+function isPracticeCompletion(value: unknown): value is PracticeStepCompletion {
+  const maybe = value as Partial<PracticeStepCompletion> | null;
+  const verification = maybe?.verification as Partial<PracticeStepCompletion['verification']> | undefined;
+  return Boolean(
+    maybe
+    && typeof maybe.id === 'string'
+    && typeof maybe.status === 'string'
+    && typeof maybe.passed === 'boolean'
+    && typeof maybe.message === 'string'
+    && verification
+    && typeof verification.status === 'string'
+    && typeof verification.verificationMode === 'string'
+    && Array.isArray(verification.details),
+  );
+}
+
+export function normalizePracticeStepCompletionResponse(value: unknown): PracticeStepCompletion {
+  const candidate = isPracticeCompletion(value)
+    ? value
+    : isPracticeCompletion((value as { readonly practiceProgress?: unknown } | null)?.practiceProgress)
+      ? (value as { readonly practiceProgress: PracticeStepCompletion }).practiceProgress
+      : null;
+
+  if (candidate) {
+    return candidate;
+  }
+
+  return {
+    id: 'unknown',
+    status: 'NOT_STARTED',
+    completedAt: null,
+    passed: false,
+    message: 'Unable to verify this step right now',
+    lessonCompleted: false,
+    verification: {
+      status: 'UNAVAILABLE',
+      verificationMode: 'NONE',
+      details: ['Practice verification response was unavailable. Please try again.'],
+    },
+  };
+}
+
 export function isCodeAlongRuntimeEnabled(input: {
   readonly configEnabled?: boolean | null | undefined;
   readonly instructorSnapshotCount: number;
@@ -115,7 +191,7 @@ export function codeAlongPermanentSurfaces(_hasActivePracticeStep: boolean): rea
   return ['video', 'my-code'];
 }
 
-export type VideoCodeAlongLayoutMode = 'SPLIT' | 'FOCUS_VIDEO' | 'FOCUS_CODE';
+export type VideoCodeAlongLayoutMode = 'SPLIT' | 'FOCUS_VIDEO' | 'FOCUS_CODE' | 'CUSTOM';
 
 export const VIDEO_CODE_SPLIT_STORAGE_KEY = 'codesync.video.splitRatio';
 export const VIDEO_CODE_LAYOUT_STORAGE_KEY = 'codesync.video.layout';
@@ -142,20 +218,24 @@ export function parseStoredVideoSplitRatio(value: string | null): number {
 }
 
 export function parseStoredVideoLayoutMode(value: string | null): VideoCodeAlongLayoutMode {
-  return value === 'FOCUS_VIDEO' || value === 'FOCUS_CODE' || value === 'SPLIT' ? value : 'SPLIT';
+  return value === 'FOCUS_VIDEO' || value === 'FOCUS_CODE' || value === 'SPLIT' || value === 'CUSTOM' ? value : 'SPLIT';
 }
 
 export function codeAlongSplitColumns(mode: VideoCodeAlongLayoutMode, videoRatio: number): string {
+  if (mode === 'SPLIT') {
+    return `minmax(360px, ${DEFAULT_VIDEO_SPLIT_RATIO}fr) 10px minmax(500px, ${100 - DEFAULT_VIDEO_SPLIT_RATIO}fr)`;
+  }
+
   if (mode === 'FOCUS_VIDEO') {
-    return 'minmax(360px, 72fr) 6px minmax(500px, 28fr)';
+    return 'minmax(360px, 72fr) 10px minmax(500px, 28fr)';
   }
 
   if (mode === 'FOCUS_CODE') {
-    return 'minmax(360px, 32fr) 6px minmax(500px, 68fr)';
+    return 'minmax(360px, 32fr) 10px minmax(500px, 68fr)';
   }
 
   const clampedRatio = clampVideoSplitRatio(videoRatio);
-  return `minmax(360px, ${clampedRatio}fr) 6px minmax(500px, ${100 - clampedRatio}fr)`;
+  return `minmax(360px, ${clampedRatio}fr) 10px minmax(500px, ${100 - clampedRatio}fr)`;
 }
 
 export type PracticeCheckpointState = 'IDLE' | 'WAITING_FOR_STUDENT' | 'CHECKING' | 'FAILED' | 'COMPLETED' | 'SKIPPED';

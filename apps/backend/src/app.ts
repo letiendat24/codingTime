@@ -61,6 +61,7 @@ import { createUserRouter } from './modules/users/user.routes';
 import { UserRepository } from './modules/users/user.repository';
 import { UserService } from './modules/users/user.service';
 import { VideoLearningController } from './modules/video-learning/video-learning.controller';
+import type { AiVideoCheckpointEvaluator } from './modules/video-learning/ai-video-checkpoint-evaluator';
 import { VideoLearningRepository } from './modules/video-learning/video-learning.repository';
 import {
   createInstructorVideoLearningRouter,
@@ -99,6 +100,7 @@ interface CreateAppOptions {
   readonly judgePublisher?: CodeJudgeMessagePublisher;
   readonly projectGradingPublisher?: ProjectGradingMessagePublisher;
   readonly commitResolver?: CommitResolver;
+  readonly aiVideoCheckpointEvaluator?: AiVideoCheckpointEvaluator;
 }
 
 export function createApp(options: CreateAppOptions = {}): Express {
@@ -145,6 +147,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     env,
     logger,
     learningService,
+    options.aiVideoCheckpointEvaluator,
   );
   const enrollmentService = new EnrollmentService(prisma, enrollmentRepository, courseRepository, learningRepository);
   const judgePublisher =
@@ -210,7 +213,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
   app.use(requestContext(logger));
   app.use(cors(env.CORS_ORIGIN));
-  app.use(express.json());
+  app.use(express.json({ limit: '2mb' }));
   app.use(
     pinoHttp({
       logger,

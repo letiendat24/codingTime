@@ -10,7 +10,7 @@
     "dev:backend": "pnpm --filter @codesync/backend dev",
     "build": "pnpm -r --if-present build",
     "lint": "pnpm -r --if-present lint",
-    "test": "pnpm -r --if-present test",
+    "test": "pnpm -r --workspace-concurrency=1 --if-present test",
     "typecheck": "pnpm -r --if-present typecheck",
     "format": "prettier --write .",
     "db:migrate": "pnpm --filter @codesync/backend db:migrate",
