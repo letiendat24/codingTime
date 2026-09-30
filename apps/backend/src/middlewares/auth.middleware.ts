@@ -39,3 +39,19 @@ export function requireRole(role: RoleName): RequestHandler {
     next();
   };
 }
+
+export function requireAnyRole(roles: readonly RoleName[]): RequestHandler {
+  return (request: Request, _response: Response, next: NextFunction) => {
+    if (!request.auth) {
+      next(new HttpError(401, 'AUTH_REQUIRED', 'Authentication is required'));
+      return;
+    }
+
+    if (!roles.some((role) => request.auth!.roles.includes(role))) {
+      next(new HttpError(403, 'AUTH_FORBIDDEN', 'Insufficient role'));
+      return;
+    }
+
+    next();
+  };
+}

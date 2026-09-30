@@ -776,6 +776,7 @@ model VideoCheckpoint {
   practiceVerificationMode VideoPracticeVerificationMode @default(NONE)
   practiceBehavior VideoPracticeBehavior @default(GUIDED)
   practiceSnapshotId String?            @db.Uuid
+  practiceProblemId String?             @db.Uuid
   practiceTargetFilePath String?
   practiceTargetStartLine Int?
   practiceTargetEndLine Int?
@@ -790,11 +791,13 @@ model VideoCheckpoint {
   workspaces Workspace[]
   codingConfig CodingCheckpointConfig?
   judgeSubmissions JudgeSubmission[]
+  practiceProblem PracticeProblem? @relation(fields: [practiceProblemId], references: [id], onDelete: Restrict)
   projectConfig ProjectCheckpointConfig?
   projectSubmissions ProjectSubmission[]
 
   @@index([videoAssetId, timestampSeconds, position])
   @@index([lessonId])
+  @@index([practiceProblemId])
   @@map("video_checkpoints")
 }
 
@@ -1083,6 +1086,7 @@ model PracticeProblem {
   progress         PracticeProgress[]
   workspaces       Workspace[]
   judgeSubmissions JudgeSubmission[]
+  videoCheckpoints VideoCheckpoint[]
 
   @@index([createdByUserId, status])
   @@index([status, difficulty])
@@ -1119,6 +1123,10 @@ model PracticeProblemTestCase {
   visibility        TestCaseVisibility
   input             String
   expectedOutput    String
+  source            String             @default("MANUAL")
+  expectedOutputSource String          @default("MANUAL")
+  referenceFingerprint String?
+  generationVersion String?
   weight            Decimal            @db.Decimal(8, 2)
   position          Int
   createdAt         DateTime           @default(now())

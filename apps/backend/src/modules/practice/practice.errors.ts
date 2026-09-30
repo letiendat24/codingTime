@@ -12,6 +12,14 @@ export function practiceProblemInvalid(message: string) {
   return new HttpError(400, 'PRACTICE_PROBLEM_INVALID', message);
 }
 
+export function practiceGenerationInvalidResult(message = 'Generation execution result is invalid') {
+  return new HttpError(422, 'EXECUTION_RESULT_INVALID', message);
+}
+
+export function practiceGenerationFailed(code: string, message: string) {
+  return new HttpError(422, code, message);
+}
+
 export function practiceProblemNotReady(details: readonly string[]) {
   return new HttpError(422, 'PRACTICE_PROBLEM_NOT_READY', 'Practice problem is missing required content', details);
 }

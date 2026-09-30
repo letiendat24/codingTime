@@ -5,7 +5,7 @@ import type { AppLogger } from '../../shared/logger';
 
 export const AI_VIDEO_CHECKPOINT_EVALUATOR_VERSION = 'video-checkpoint-ai-v1';
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.6-flash';
-export const DEFAULT_AI_VERIFICATION_TIMEOUT_MS = 20_000;
+export const DEFAULT_AI_VERIFICATION_TIMEOUT_MS = 60_000;
 
 export type AiCheckpointDecision = 'PASS' | 'NEEDS_FIX' | 'CANNOT_VERIFY';
 
@@ -275,7 +275,31 @@ export class GeminiVideoCheckpointEvaluator implements AiVideoCheckpointEvaluato
       }), this.env.AI_VERIFICATION_TIMEOUT_MS ?? DEFAULT_AI_VERIFICATION_TIMEOUT_MS);
 
       const rawText = response.text ?? '';
-      const parsedJson = JSON.parse(extractJsonObject(rawText)) as unknown;
+      let parsedJson: unknown;
+
+      try {
+        parsedJson = JSON.parse(extractJsonObject(rawText)) as unknown;
+      } catch (parseError) {
+        this.logger?.warn({
+          provider: 'gemini',
+          checkpointId: input.checkpoint.id,
+          model: this.model,
+          hasApiKey: Boolean(this.env.GEMINI_API_KEY),
+          finishReason: response.candidates?.[0]?.finishReason ?? null,
+          responseTextBytes: Buffer.byteLength(rawText, 'utf8'),
+          errorClass: parseError instanceof Error ? parseError.name : typeof parseError,
+        }, 'ai verification provider response was not valid json');
+
+        return {
+          status: 'CANNOT_VERIFY',
+          explanation: 'AI verification returned an invalid response.',
+          guidance: 'Please retry the check.',
+          requirements: [],
+          model: this.model,
+          providerErrorCode: 'AI_PROVIDER_RESPONSE_INVALID',
+        };
+      }
+
       const parsed = aiEvaluationSchema.safeParse(parsedJson);
 
       if (!parsed.success) {

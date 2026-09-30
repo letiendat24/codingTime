@@ -1081,6 +1081,7 @@ function VideoLessonView({
                       size="sm"
                       variant="secondary"
                       onClick={() => setSecondaryPanel('instructor')}
+                      disabled={Boolean(activePracticeStep.practiceProblem)}
                     >
                       Show Instructor Code
                     </Button>
@@ -1185,6 +1186,7 @@ function VideoLessonView({
                       size="sm"
                       variant="secondary"
                       onClick={() => setSecondaryPanel('instructor')}
+                      disabled={Boolean(activePracticeStep.practiceProblem)}
                       leftIcon={<Eye className="h-3.5 w-3.5" />}
                     >
                       Show Code
@@ -1225,6 +1227,38 @@ function VideoLessonView({
                     ) : null}
                   </div>
                 </div>
+                {activePracticeStep.practiceProblem ? (
+                  <div className="mt-3 space-y-3 rounded-md border border-border bg-background/80 p-3 text-xs">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone="info">Practice Problem</Badge>
+                      <span className="font-semibold text-foreground">{activePracticeStep.practiceProblem.title}</span>
+                      <span className="text-muted-foreground">{activePracticeStep.practiceProblem.difficulty}</span>
+                    </div>
+                    <p className="leading-5 text-muted-foreground">{activePracticeStep.practiceProblem.description}</p>
+                    {activePracticeStep.practiceProblem.constraints ? (
+                      <p className="leading-5 text-muted-foreground">
+                        <span className="font-semibold text-foreground">Constraints:</span> {activePracticeStep.practiceProblem.constraints}
+                      </p>
+                    ) : null}
+                    {activePracticeStep.practiceProblem.publicTests.length > 0 ? (
+                      <div className="space-y-2">
+                        <p className="font-semibold text-foreground">Public samples</p>
+                        {activePracticeStep.practiceProblem.publicTests.map((test) => (
+                          <div key={test.id} className="grid gap-2 rounded-md border border-border/80 bg-card p-2 md:grid-cols-2">
+                            <div>
+                              <p className="mb-1 font-medium text-foreground">{test.name} input</p>
+                              <pre className="max-h-28 overflow-auto rounded bg-muted p-2 font-mono text-[11px] text-muted-foreground">{test.input}</pre>
+                            </div>
+                            <div>
+                              <p className="mb-1 font-medium text-foreground">Expected output</p>
+                              <pre className="max-h-28 overflow-auto rounded bg-muted p-2 font-mono text-[11px] text-muted-foreground">{test.expectedOutput}</pre>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 {practiceFeedback ? (
                   <div className="mt-3 rounded-md border border-border bg-background/80 p-3 text-xs">
                     <div className="flex flex-wrap items-center gap-2">
@@ -1245,6 +1279,11 @@ function VideoLessonView({
                     ) : null}
                     {practiceFeedback.guidance ? (
                       <p className="mt-1 leading-5 text-muted-foreground">{practiceFeedback.guidance}</p>
+                    ) : null}
+                    {practiceFeedback.providerErrorCode && practiceFeedback.status === 'UNAVAILABLE' ? (
+                      <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                        Diagnostic: {practiceFeedback.providerErrorCode}
+                      </p>
                     ) : null}
                     {practiceFeedback.requirements && practiceFeedback.requirements.length > 0 ? (
                       <ul className="mt-2 space-y-1">
@@ -1275,6 +1314,15 @@ function VideoLessonView({
                 }}
                 capabilities={effectiveWorkspaceCapabilities}
                 workspaceType={codeAlong.data?.workspaceType ?? 'SINGLE_FILE'}
+                runExecutionRequest={activePracticeStep?.practiceProblem && workspaceId
+                  ? () => requestJson<{ readonly id: string; readonly status: string }>(
+                      `/learning/practice-steps/${activePracticeStep.id}/executions`,
+                      {
+                        method: 'POST',
+                        body: JSON.stringify({ workspaceId }),
+                      },
+                    )
+                  : undefined}
               />
             ) : workspaceError ? (
               <Card className="space-y-3 border-dashed p-8 text-center">

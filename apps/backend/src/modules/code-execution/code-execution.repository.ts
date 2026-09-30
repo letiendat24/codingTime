@@ -107,6 +107,62 @@ export class CodeExecutionRepository {
     });
   }
 
+  async findVideoPracticeWorkspaceForRun(userId: string, checkpointId: string, workspaceId: string) {
+    return this.prisma.workspace.findFirst({
+      where: {
+        id: workspaceId,
+        userId,
+        lessonId: { not: null },
+        checkpointId: null,
+        practiceProblemId: null,
+        lesson: {
+          videoAsset: {
+            status: VideoAssetStatus.READY,
+            checkpoints: {
+              some: {
+                id: checkpointId,
+                practiceEnabled: true,
+                practiceProblemId: { not: null },
+                practiceProblem: { status: 'PUBLISHED', archivedAt: null },
+              },
+            },
+          },
+          module: {
+            course: {
+              status: { in: [CourseStatus.PUBLISHED, CourseStatus.ARCHIVED] },
+              enrollments: { some: { studentId: userId, status: { not: EnrollmentStatus.CANCELLED } } },
+            },
+          },
+        },
+      },
+      include: {
+        files: { orderBy: { path: 'asc' } },
+        lesson: {
+          include: {
+            videoAsset: {
+              include: {
+                checkpoints: {
+                  where: { id: checkpointId, practiceEnabled: true, practiceProblemId: { not: null } },
+                  include: {
+                    practiceProblem: {
+                      include: {
+                        testCases: {
+                          where: { visibility: 'PUBLIC' },
+                          orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+                        },
+                      },
+                    },
+                  },
+                  take: 1,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+
   async findCodeAlongLessonForStudent(studentId: string, lessonId: string) {
     return this.prisma.lesson.findFirst({
       where: {
@@ -274,6 +330,33 @@ export class CodeExecutionRepository {
         status: { in: [ExecutionStatus.QUEUED, ExecutionStatus.RUNNING] },
       },
     });
+  }
+
+  async createEphemeralPracticeWorkspace(input: {
+    readonly userId: string;
+    readonly practiceProblemId: string;
+    readonly language: string;
+    readonly entryFile: string;
+    readonly files: readonly { readonly path: string; readonly content: string }[];
+    readonly now: Date;
+  }) {
+    const workspace = await this.prisma.workspace.create({
+      data: {
+        userId: input.userId,
+        practiceProblemId: null,
+        language: input.language,
+        entryFile: input.entryFile,
+        lastOpenedAt: input.now,
+        files: {
+          create: input.files.map((file) => ({
+            path: file.path,
+            content: file.content,
+          })),
+        },
+      },
+    });
+
+    return this.findWorkspaceForUser(input.userId, workspace.id);
   }
 
   async recoverStaleExecutionsForUser(input: {

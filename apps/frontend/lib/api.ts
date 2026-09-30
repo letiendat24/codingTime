@@ -305,6 +305,37 @@ export type VideoPracticeBehavior = 'GUIDED' | 'REQUIRED';
 export type PracticeProgressStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED' | 'SKIPPED';
 export type PracticeVerificationStatus = 'PASSED' | 'FAILED' | 'UNAVAILABLE';
 
+export interface LinkedPracticeProblemPublicTest {
+  readonly id: string;
+  readonly name: string;
+  readonly input: string;
+  readonly expectedOutput: string;
+  readonly weight: number;
+  readonly position: number;
+  readonly visibility: 'PUBLIC';
+}
+
+export interface LinkedPracticeProblemSummary {
+  readonly id: string;
+  readonly title: string;
+  readonly slug: string;
+  readonly description: string;
+  readonly inputFormat: string;
+  readonly outputFormat: string;
+  readonly constraints: string;
+  readonly examples: unknown;
+  readonly difficulty: string;
+  readonly status: string;
+  readonly language: string;
+  readonly entryFile: string;
+  readonly executionContract: string;
+  readonly timeLimitMs: number;
+  readonly memoryLimitMb: number;
+  readonly passScore: number;
+  readonly scoringMode: string;
+  readonly publicTests: readonly LinkedPracticeProblemPublicTest[];
+}
+
 export interface VideoPracticeStep {
   readonly id: string;
   readonly lessonId: string;
@@ -317,12 +348,14 @@ export interface VideoPracticeStep {
   readonly behavior: VideoPracticeBehavior;
   readonly verificationMode: VideoPracticeVerificationMode;
   readonly snapshotId: string | null;
+  readonly practiceProblemId: string | null;
   readonly targetFilePath: string | null;
   readonly targetStartLine: number | null;
   readonly targetEndLine: number | null;
   readonly verificationRules: unknown;
   readonly status: PracticeProgressStatus;
   readonly completed: boolean;
+  readonly practiceProblem: LinkedPracticeProblemSummary | null;
 }
 
 export interface PracticeStepCompletion {
@@ -343,6 +376,7 @@ export interface PracticeStepCompletion {
       readonly status: 'PASS' | 'NEEDS_FIX' | 'UNKNOWN';
       readonly feedback: string;
     }[];
+    readonly providerErrorCode?: string | null;
     readonly attemptId?: string | null;
     readonly cached?: boolean;
     readonly stale?: boolean;
@@ -363,9 +397,11 @@ export interface VideoCheckpoint {
   readonly practiceVerificationMode?: VideoPracticeVerificationMode;
   readonly practiceBehavior?: VideoPracticeBehavior;
   readonly practiceSnapshotId?: string | null;
+  readonly practiceProblemId?: string | null;
   readonly practiceTargetFilePath?: string | null;
   readonly practiceTargetStartLine?: number | null;
   readonly practiceTargetEndLine?: number | null;
+  readonly practiceProblem?: LinkedPracticeProblemSummary | null;
 }
 
 export interface CodeSnapshotMetadata {
@@ -916,6 +952,7 @@ export interface InstructorPracticeProblem extends PracticeProblemDetail {
   readonly status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
   readonly starterFiles: readonly WorkspaceFile[];
   readonly referenceFiles: readonly WorkspaceFile[];
+  readonly currentReferenceFingerprint: string | null;
   readonly scoringMode: 'ALL_OR_NOTHING' | 'WEIGHTED';
   readonly validatedAt: string | null;
   readonly validationFingerprint: string | null;
@@ -929,9 +966,47 @@ export interface InstructorPracticeProblem extends PracticeProblemDetail {
     readonly visibility: 'PUBLIC' | 'HIDDEN';
     readonly input: string;
     readonly expectedOutput: string;
+    readonly source?: 'MANUAL' | 'EXAMPLE' | 'IMPORT' | 'GENERATOR';
+    readonly expectedOutputSource?: 'MANUAL' | 'REFERENCE_SOLUTION';
+    readonly referenceFingerprint?: string | null;
+    readonly generationVersion?: string | null;
     readonly weight: number;
     readonly position: number;
   }[];
+}
+
+export interface PracticeGeneratedTestPreview {
+  readonly name: string;
+  readonly input: unknown;
+  readonly weight: number;
+  readonly expectedOutput: string;
+}
+
+export interface PracticeTestGenerationPreviewResponse {
+  readonly executionId: string;
+  readonly status: ExecutionDetail['status'];
+  readonly visibility: 'PUBLIC' | 'HIDDEN';
+  readonly source: 'IMPORT' | 'GENERATOR';
+  readonly referenceFingerprint: string;
+  readonly generationVersion: string;
+}
+
+export interface PracticeGeneratedTestsCommitResponse {
+  readonly committed: number;
+  readonly mode: 'APPEND' | 'REPLACE_HIDDEN';
+  readonly source: 'EXAMPLE' | 'IMPORT' | 'GENERATOR';
+  readonly referenceFingerprint: string;
+  readonly publicCount: number;
+  readonly hiddenCount: number;
+  readonly testCases: InstructorPracticeProblem['testCases'];
+}
+
+export interface PracticeHiddenTestsDeleteResponse {
+  readonly deleted: number;
+  readonly source: 'IMPORT' | 'GENERATOR' | null;
+  readonly publicCount: number;
+  readonly hiddenCount: number;
+  readonly testCases: InstructorPracticeProblem['testCases'];
 }
 
 export interface PracticeStats {

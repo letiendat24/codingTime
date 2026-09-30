@@ -4,6 +4,7 @@ import type { Request, Response } from 'express';
 import {
   CheckpointProgressStatus,
   LearningActivityType,
+  PracticeProblemStatus,
   VideoCheckpointType,
   VideoPracticeBehavior,
   VideoPracticeVerificationMode,
@@ -68,6 +69,7 @@ import type {
   InstructorCheckpointResponse,
   InstructorCheckpointPracticeResponse,
   InteractiveVideoPlaybackResponse,
+  LinkedPracticeProblemSummary,
   PracticeStepCompletionResponse,
   PracticeVerificationStatus,
   PracticeStepResponse,
@@ -142,7 +144,74 @@ function formatTimestampLabel(seconds: number): string {
   return `${minutes}:${remainder}`;
 }
 
-function mapCheckpoint(checkpoint: VideoCheckpoint & { progress?: readonly { status: CheckpointProgressStatus }[] }): StudentCheckpoint {
+type LinkedPracticeProblemRelation = {
+  readonly id: string;
+  readonly title: string;
+  readonly slug: string;
+  readonly description: string;
+  readonly inputFormat: string;
+  readonly outputFormat: string;
+  readonly constraints: string;
+  readonly examplesJson: Prisma.JsonValue | null;
+  readonly difficulty: LinkedPracticeProblemSummary['difficulty'];
+  readonly status: PracticeProblemStatus;
+  readonly language: string;
+  readonly entryFile: string;
+  readonly executionContract: string;
+  readonly timeLimitMs: number;
+  readonly memoryLimitMb: number;
+  readonly passScore: Prisma.Decimal | number;
+  readonly scoringMode: LinkedPracticeProblemSummary['scoringMode'];
+  readonly testCases?: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly input: string;
+    readonly expectedOutput: string;
+    readonly weight: Prisma.Decimal | number;
+    readonly position: number;
+    readonly visibility: LinkedPracticeProblemSummary['publicTests'][number]['visibility'];
+  }[];
+} | null;
+
+function mapLinkedPracticeProblem(problem: LinkedPracticeProblemRelation): LinkedPracticeProblemSummary | null {
+  if (!problem) {
+    return null;
+  }
+
+  return {
+    id: problem.id,
+    title: problem.title,
+    slug: problem.slug,
+    description: problem.description,
+    inputFormat: problem.inputFormat,
+    outputFormat: problem.outputFormat,
+    constraints: problem.constraints,
+    examples: problem.examplesJson ?? [],
+    difficulty: problem.difficulty,
+    status: problem.status,
+    language: problem.language,
+    entryFile: problem.entryFile,
+    executionContract: problem.executionContract,
+    timeLimitMs: problem.timeLimitMs,
+    memoryLimitMb: problem.memoryLimitMb,
+    passScore: Number(problem.passScore),
+    scoringMode: problem.scoringMode,
+    publicTests: (problem.testCases ?? []).map((test) => ({
+      id: test.id,
+      name: test.name,
+      input: test.input,
+      expectedOutput: test.expectedOutput,
+      weight: Number(test.weight),
+      position: test.position,
+      visibility: test.visibility,
+    })),
+  };
+}
+
+function mapCheckpoint(checkpoint: VideoCheckpoint & {
+  progress?: readonly { status: CheckpointProgressStatus }[];
+  practiceProblem?: LinkedPracticeProblemRelation;
+}): StudentCheckpoint {
   return {
     id: checkpoint.id,
     timestampSeconds: checkpoint.timestampSeconds,
@@ -157,14 +226,17 @@ function mapCheckpoint(checkpoint: VideoCheckpoint & { progress?: readonly { sta
     practiceVerificationMode: checkpoint.practiceVerificationMode,
     practiceBehavior: checkpoint.practiceBehavior,
     practiceSnapshotId: checkpoint.practiceSnapshotId,
+    practiceProblemId: checkpoint.practiceProblemId,
     practiceTargetFilePath: checkpoint.practiceTargetFilePath,
     practiceTargetStartLine: checkpoint.practiceTargetStartLine,
     practiceTargetEndLine: checkpoint.practiceTargetEndLine,
+    practiceProblem: mapLinkedPracticeProblem(checkpoint.practiceProblem ?? null),
   };
 }
 
 type InstructorCheckpointWithRelations = VideoCheckpoint & {
   readonly codingConfig?: { readonly testCases?: readonly unknown[] } | null;
+  readonly practiceProblem?: LinkedPracticeProblemRelation;
   readonly videoAsset?: { readonly codeSnapshots?: readonly CodeSnapshot[] } | null;
   readonly lesson?: {
     readonly codeAlongConfig?: {
@@ -186,6 +258,7 @@ type InstructorCheckpointWithRelations = VideoCheckpoint & {
 };
 
 type PracticeMilestoneCandidate = VideoCheckpoint & {
+  readonly practiceProblem?: LinkedPracticeProblemRelation;
   readonly videoAsset?: {
     readonly codeSnapshots?: readonly Pick<CodeSnapshot, 'id' | 'lessonId' | 'videoAssetId'>[];
   } | null;
@@ -225,9 +298,13 @@ function hasMatchingPracticeSnapshot(
 }
 
 function requiresPracticeSnapshotLink(
-  checkpoint: Pick<VideoCheckpoint, 'title' | 'practiceSnapshotId' | 'practiceConfigMode' | 'practiceVerificationMode'>,
+  checkpoint: Pick<VideoCheckpoint, 'title' | 'practiceSnapshotId' | 'practiceProblemId' | 'practiceConfigMode' | 'practiceVerificationMode'>,
   snapshots: readonly Pick<CodeSnapshot, 'id' | 'lessonId' | 'videoAssetId'>[],
 ) {
+  if (checkpoint.practiceProblemId) {
+    return false;
+  }
+
   if (checkpoint.practiceSnapshotId) {
     return true;
   }
@@ -400,14 +477,19 @@ function mapInstructorCheckpoint(
     practiceVerificationMode: checkpoint.practiceVerificationMode,
     practiceBehavior: checkpoint.practiceBehavior,
     practiceSnapshotId: checkpoint.practiceSnapshotId,
+    practiceProblemId: checkpoint.practiceProblemId,
     practiceTargetFilePath: checkpoint.practiceTargetFilePath,
     practiceTargetStartLine: checkpoint.practiceTargetStartLine,
     practiceTargetEndLine: checkpoint.practiceTargetEndLine,
     ...(practice ? { practice } : {}),
+    practiceProblem: mapLinkedPracticeProblem(checkpoint.practiceProblem ?? null),
   };
 }
 
-function mapPracticeStep(checkpoint: VideoCheckpoint & { progress?: readonly { status: CheckpointProgressStatus }[] }): PracticeStepResponse {
+function mapPracticeStep(checkpoint: VideoCheckpoint & {
+  progress?: readonly { status: CheckpointProgressStatus }[];
+  practiceProblem?: LinkedPracticeProblemRelation;
+}): PracticeStepResponse {
   const status = checkpoint.progress?.[0]?.status ?? CheckpointProgressStatus.NOT_STARTED;
 
   return {
@@ -422,12 +504,14 @@ function mapPracticeStep(checkpoint: VideoCheckpoint & { progress?: readonly { s
     behavior: checkpoint.practiceBehavior,
     verificationMode: checkpoint.practiceVerificationMode,
     snapshotId: checkpoint.practiceSnapshotId,
+    practiceProblemId: checkpoint.practiceProblemId,
     targetFilePath: checkpoint.practiceTargetFilePath,
     targetStartLine: checkpoint.practiceTargetStartLine,
     targetEndLine: checkpoint.practiceTargetEndLine,
     verificationRules: checkpoint.practiceVerificationRulesJson ?? null,
     status,
     completed: status === CheckpointProgressStatus.COMPLETED,
+    practiceProblem: mapLinkedPracticeProblem(checkpoint.practiceProblem ?? null),
   };
 }
 
@@ -1013,6 +1097,12 @@ export class VideoLearningService {
     return (await this.repository.listCheckpointsForInstructor(instructorId, videoAssetId)).map((c) => mapInstructorCheckpoint(c));
   }
 
+  async listLinkablePracticeProblems(instructorId: string) {
+    return (await this.repository.listLinkablePracticeProblemsForInstructor(instructorId))
+      .map(mapLinkedPracticeProblem)
+      .filter((problem): problem is LinkedPracticeProblemSummary => problem !== null);
+  }
+
   async updateCheckpoint(instructorId: string, checkpointId: string, input: CheckpointUpdateInput) {
     const checkpoint = await this.repository.findCheckpointForInstructor(instructorId, checkpointId);
 
@@ -1060,27 +1150,44 @@ export class VideoLearningService {
     const isManualOverride = input.configMode === 'MANUAL_OVERRIDE'
       || input.overrideVerification !== undefined
       || input.overrideBehavior !== undefined
+      || input.practiceProblemId !== undefined
       || (input.practiceVerificationMode !== undefined && input.configMode !== 'AUTO');
 
     const effectiveVerificationMode = input.overrideVerification ?? input.practiceVerificationMode;
     const effectiveBehavior = input.overrideBehavior ?? input.practiceBehavior;
+    const practiceProblem = input.practiceProblemId
+      ? await this.repository.findLinkablePracticeProblemForInstructor(instructorId, input.practiceProblemId)
+      : null;
+
+    if (input.practiceProblemId && !practiceProblem) {
+      throw practiceStepInvalid('Practice problem must be published and owned by this instructor');
+    }
+    if (practiceProblem && (!practiceProblem.validatedAt || !practiceProblem.validationFingerprint || practiceProblem.status !== PracticeProblemStatus.PUBLISHED)) {
+      throw practiceStepInvalid('Practice problem must be validated and published before linking');
+    }
+    if (practiceProblem && practiceProblem.testCases.length === 0) {
+      throw practiceStepInvalid('Practice problem must have at least one public sample test before linking');
+    }
+
+    const isPracticeProblemStep = Boolean(practiceProblem);
+    const requestedVerificationMode = isPracticeProblemStep ? VideoPracticeVerificationMode.TESTS : effectiveVerificationMode;
 
     const checkpointOverride = isManualOverride
       ? {
           behavior: effectiveBehavior,
-          verificationMode: effectiveVerificationMode,
-          targetFilePath: input.practiceTargetFilePath,
-          targetStartLine: input.practiceTargetStartLine,
-          targetEndLine: input.practiceTargetEndLine,
-          practiceSnapshotId: input.practiceSnapshotId,
-          verificationRules: input.practiceVerificationRules as Record<string, unknown> | undefined,
+          verificationMode: requestedVerificationMode,
+          targetFilePath: isPracticeProblemStep ? null : input.practiceTargetFilePath,
+          targetStartLine: isPracticeProblemStep ? null : input.practiceTargetStartLine,
+          targetEndLine: isPracticeProblemStep ? null : input.practiceTargetEndLine,
+          practiceSnapshotId: isPracticeProblemStep ? null : input.practiceSnapshotId,
+          verificationRules: isPracticeProblemStep ? undefined : input.practiceVerificationRules as Record<string, unknown> | undefined,
         }
       : (input.practiceSnapshotId || input.practiceTargetFilePath ? {
           targetFilePath: input.practiceTargetFilePath,
         } : null);
 
     const hasValidTests = Boolean(checkpoint.codingConfig?.testCases && checkpoint.codingConfig.testCases.length > 0);
-    const judgeSupported = hasValidTests;
+    const judgeSupported = hasValidTests || isPracticeProblemStep;
 
     if (isManualOverride && input.practiceSnapshotId && !allSnapshots.some((snapshot) => snapshot.id === input.practiceSnapshotId)) {
       throw practiceStepInvalid('Reference snapshot must belong to this video lesson');
@@ -1097,10 +1204,10 @@ export class VideoLearningService {
       checkpointContext: {
         timestampSeconds: checkpoint.timestampSeconds,
         studentTask: checkpoint.description?.trim() ?? '',
-        hasValidTests,
+        hasValidTests: hasValidTests || isPracticeProblemStep,
         judgeSupported,
         structuralSupported: true,
-        activeFilePath: input.practiceTargetFilePath ?? undefined,
+        activeFilePath: isPracticeProblemStep ? undefined : input.practiceTargetFilePath ?? undefined,
       },
       allSnapshots,
     });
@@ -1122,6 +1229,7 @@ export class VideoLearningService {
         practiceVerificationMode: VideoPracticeVerificationMode.NONE,
         practiceBehavior: VideoPracticeBehavior.GUIDED,
         practiceSnapshotId: null,
+        practiceProblem: { disconnect: true },
         practiceTargetFilePath: null,
         practiceTargetStartLine: null,
         practiceTargetEndLine: null,
@@ -1167,7 +1275,7 @@ export class VideoLearningService {
         verificationMode: effective.verificationMode,
         practiceSnapshotId: effective.practiceSnapshotId,
         hasSnapshot: allSnapshots.length > 0,
-        hasValidTests,
+        hasValidTests: hasValidTests || isPracticeProblemStep,
         targetFilePath: effective.targetFilePath,
       });
 
@@ -1190,10 +1298,10 @@ export class VideoLearningService {
       }
 
       if (effective.verificationMode === VideoPracticeVerificationMode.TESTS) {
-        if (!hasValidTests) {
+        if (!hasValidTests && !isPracticeProblemStep) {
           throw practiceStepInvalid('Test verification mode requires valid test cases in the lesson');
         }
-        const language = lessonConfig?.language ?? DEFAULT_CODE_ALONG_LANGUAGE;
+        const language = practiceProblem?.language ?? lessonConfig?.language ?? DEFAULT_CODE_ALONG_LANGUAGE;
         if (!supportsJudge(language, true, true)) {
           throw practiceStepInvalid('Test verification is not supported for this language');
         }
@@ -1203,13 +1311,18 @@ export class VideoLearningService {
     const updated = await this.repository.updateCheckpoint(checkpoint.id, {
       practiceEnabled: input.practiceEnabled ?? effective.practiceEnabled,
       practiceConfigMode: isManualOverride ? 'MANUAL_OVERRIDE' : 'AUTO',
-      practiceVerificationMode: effective.verificationMode,
+      practiceVerificationMode: isPracticeProblemStep ? VideoPracticeVerificationMode.TESTS : effective.verificationMode,
       practiceBehavior: effective.behavior,
-      practiceSnapshotId: effective.practiceSnapshotId,
-      practiceTargetFilePath: effective.targetFilePath,
-      practiceTargetStartLine: input.practiceTargetStartLine ?? null,
-      practiceTargetEndLine: input.practiceTargetEndLine ?? null,
-      practiceVerificationRulesJson: effective.generatedRules.length > 0
+      practiceSnapshotId: isPracticeProblemStep ? null : effective.practiceSnapshotId,
+      ...(practiceProblem
+        ? { practiceProblem: { connect: { id: practiceProblem.id } } }
+        : input.practiceProblemId === null
+          ? { practiceProblem: { disconnect: true } }
+          : {}),
+      practiceTargetFilePath: isPracticeProblemStep ? null : effective.targetFilePath,
+      practiceTargetStartLine: isPracticeProblemStep ? null : input.practiceTargetStartLine ?? null,
+      practiceTargetEndLine: isPracticeProblemStep ? null : input.practiceTargetEndLine ?? null,
+      practiceVerificationRulesJson: !isPracticeProblemStep && effective.generatedRules.length > 0
         ? ({ requiredPaths: effective.targetFiles as string[], rules: effective.generatedRules as object[] } as Prisma.InputJsonValue)
         : Prisma.DbNull,
     });
@@ -1253,10 +1366,10 @@ export class VideoLearningService {
         allowCheck: currentConfig?.allowCheck ?? true,
         allowJudge: currentConfig?.allowJudge ?? true,
       },
-      targetFiles: effective.targetFiles,
-      generatedRules: effective.generatedRules,
-      summary: effective.summary,
-      reason: effective.reason,
+      targetFiles: isPracticeProblemStep ? [] : effective.targetFiles,
+      generatedRules: isPracticeProblemStep ? [] : effective.generatedRules,
+      summary: isPracticeProblemStep ? `Practice problem linked: ${practiceProblem!.title}` : effective.summary,
+      reason: isPracticeProblemStep ? 'This milestone uses the published Practice/Judge infrastructure.' : effective.reason,
     };
 
     return mapInstructorCheckpoint(updated, practiceResponse);
@@ -1375,6 +1488,7 @@ export class VideoLearningService {
         summary: input.result.explanation,
         guidance: input.result.guidance,
         requirements: input.result.requirements,
+        providerErrorCode: input.result.providerErrorCode ?? null,
         attemptId: input.attemptId,
         cached: input.cached ?? false,
         stale: input.stale ?? false,
@@ -1837,7 +1951,15 @@ export class VideoLearningService {
         if (!input.workspaceId || !input.submissionId) {
           verification = unavailable(['Submit to Judge before checking this step']);
         } else {
-          const submission = await repository.findJudgeSubmissionForPracticeStep(studentId, checkpoint.id, input.workspaceId, input.submissionId);
+          const submission = checkpoint.practiceProblemId
+            ? await repository.findJudgeSubmissionForPracticeProblemStep({
+                studentId,
+                checkpointId: checkpoint.id,
+                workspaceId: input.workspaceId,
+                submissionId: input.submissionId,
+                practiceProblemId: checkpoint.practiceProblemId,
+              })
+            : await repository.findJudgeSubmissionForPracticeStep(studentId, checkpoint.id, input.workspaceId, input.submissionId);
           if (!submission) {
             verification = unavailable(['Judge submission is unavailable for this practice step']);
           } else if (submission.status === JudgeSubmissionStatus.QUEUED || submission.status === JudgeSubmissionStatus.RUNNING) {

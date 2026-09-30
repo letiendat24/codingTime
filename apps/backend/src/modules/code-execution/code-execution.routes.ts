@@ -31,6 +31,7 @@ export function createCodeExecutionRouter(
   router.get('/workspaces/:workspaceId/revisions', ...studentOnly, asyncHandler(controller.listRevisions));
   router.post('/workspaces/:workspaceId/revisions/:revisionId/restore', ...studentOnly, asyncHandler(controller.restoreRevision));
   router.post('/workspaces/:workspaceId/executions', ...studentOnly, executionLimit, asyncHandler(controller.runWorkspace));
+  router.post('/learning/practice-steps/:checkpointId/executions', ...studentOnly, executionLimit, asyncHandler(controller.runVideoPracticeStep));
   router.get('/workspaces/:workspaceId/executions', ...studentOnly, asyncHandler(controller.listExecutions));
   router.get('/executions/:executionId', ...studentOnly, asyncHandler(controller.getExecution));
 

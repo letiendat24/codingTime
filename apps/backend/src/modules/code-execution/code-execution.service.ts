@@ -28,7 +28,7 @@ import {
   workspaceRevisionNotFound,
 } from './code-execution.errors';
 import { CodeExecutionRepository } from './code-execution.repository';
-import type { ExecutionHistoryQuery, RunWorkspaceInput, WorkspaceFileInput } from './code-execution.schemas';
+import type { ExecutionHistoryQuery, RunVideoPracticeStepInput, RunWorkspaceInput, WorkspaceFileInput } from './code-execution.schemas';
 import type {
   ExecutionDetailResponse,
   ExecutionHistoryItem,
@@ -44,6 +44,7 @@ const DEFAULT_STARTER_FILES: readonly WorkspaceFileInput[] = [
 ];
 const SUPPORTED_LANGUAGES = new Set([DEFAULT_LANGUAGE, 'typescript']);
 const STALE_EXECUTION_GRACE_MS = 5_000;
+type InternalExecutionMode = 'DIRECT' | 'FUNCTION' | 'PRACTICE_ORACLE_BATCH' | 'PRACTICE_GENERATOR_ORACLE';
 
 export interface CodeExecutionMessagePublisher {
   publishExecutionRequested(message: AsyncMessage<CodeExecutionRequestedPayload>): void;
@@ -587,6 +588,222 @@ export class CodeExecutionService {
       throw error;
     }
     this.logger.info({ userId, workspaceId, executionId: execution.id, jobId: execution.jobId, correlationId }, 'execution queued');
+
+    return { id: execution.id, status: execution.status };
+  }
+
+  async runVideoPracticeStep(
+    userId: string,
+    checkpointId: string,
+    correlationId: string,
+    input: RunVideoPracticeStepInput,
+  ): Promise<ExecutionQueuedResponse> {
+    const now = new Date();
+    const workspace = await this.repository.findVideoPracticeWorkspaceForRun(userId, checkpointId, input.workspaceId);
+
+    if (!workspace) {
+      throw workspaceNotFound();
+    }
+
+    const checkpoint = workspace.lesson?.videoAsset?.checkpoints[0];
+    const problem = checkpoint?.practiceProblem;
+
+    if (!checkpoint || !problem || problem.executionContract !== 'FUNCTION') {
+      throw practiceRunSampleUnavailable('Practice step has no runnable practice problem');
+    }
+
+    const language = validateLanguage(workspace.language);
+    if (language !== problem.language.toLowerCase()) {
+      throw practiceRunInputInvalid('Workspace language does not match practice problem configuration');
+    }
+
+    const files = workspace.files.map((file) => ({ path: file.path, content: file.content }));
+    const entryFile = safePath(problem.entryFile);
+    validateFiles(files, this.env);
+
+    if (!files.some((file) => file.path === entryFile)) {
+      throw workspaceFileInvalid('Workspace is missing the linked practice problem entry file');
+    }
+
+    let stdin: string;
+    if (hasOwnInput(input)) {
+      if (input.publicTestCaseId) {
+        throw practiceRunInputInvalid('Choose either a public sample or custom input, not both');
+      }
+      stdin = serializeRunInput(input.input);
+    } else {
+      const publicTests = problem.testCases ?? [];
+      const selectedPublicTest = input.publicTestCaseId
+        ? publicTests.find((test) => test.id === input.publicTestCaseId)
+        : publicTests[0];
+
+      if (!selectedPublicTest) {
+        throw practiceRunSampleUnavailable('Selected public sample is not available for this practice problem');
+      }
+
+      stdin = selectedPublicTest.input;
+    }
+
+    const queuedBefore = new Date(now.getTime() - (this.env.CODE_EXECUTION_TIMEOUT_MS * this.env.CODE_EXECUTION_MAX_ATTEMPTS) - STALE_EXECUTION_GRACE_MS);
+    const runningBefore = new Date(now.getTime() - this.env.CODE_EXECUTION_TIMEOUT_MS - STALE_EXECUTION_GRACE_MS);
+    const recovered = await this.repository.recoverStaleExecutionsForUser({
+      userId,
+      queuedBefore,
+      runningBefore,
+      recoveredAt: now,
+    });
+    if (recovered.queued > 0 || recovered.running > 0) {
+      this.logger.warn({ userId, recovered }, 'stale executions recovered before video practice run active limit check');
+    }
+
+    const activeExecutions = await this.repository.countActiveExecutions(userId);
+    if (activeExecutions >= this.env.CODE_EXECUTION_MAX_ACTIVE_PER_USER) {
+      throw executionActiveLimitExceeded();
+    }
+
+    const execution = await this.repository.createExecution({
+      workspaceId: workspace.id,
+      userId,
+      language,
+      entryFile,
+      filesSnapshotJson: { files } as Prisma.InputJsonValue,
+      jobId: randomUUID(),
+      idempotencyKey: randomUUID(),
+      correlationId,
+      now,
+    });
+
+    const message: AsyncMessage<CodeExecutionRequestedPayload> = {
+      jobId: execution.jobId,
+      idempotencyKey: execution.idempotencyKey,
+      correlationId,
+      requestedByUserId: userId,
+      createdAt: now.toISOString(),
+      payload: {
+        executionId: execution.id,
+        workspaceId: workspace.id,
+        language,
+        files,
+        entryFile,
+        executionMode: 'FUNCTION',
+        stdin,
+      },
+    };
+
+    try {
+      this.publisher.publishExecutionRequested(message);
+    } catch (error) {
+      await this.repository.finishExecution({
+        executionId: execution.id,
+        status: ExecutionStatus.FAILED,
+        exitCode: null,
+        stdout: '',
+        stderr: 'Unable to dispatch execution job.',
+        durationMs: 0,
+        memoryBytes: null,
+        errorCode: 'EXECUTION_DISPATCH_FAILED',
+        finishedAt: now,
+      });
+      this.logger.error({ error, userId, checkpointId, workspaceId: workspace.id, executionId: execution.id, correlationId }, 'video practice execution dispatch failed');
+      throw error;
+    }
+
+    this.logger.info({ userId, checkpointId, workspaceId: workspace.id, executionId: execution.id, jobId: execution.jobId, correlationId }, 'video practice execution queued');
+
+    return { id: execution.id, status: execution.status };
+  }
+
+  async runPracticeAuthoringSnapshot(input: {
+    readonly userId: string;
+    readonly practiceProblemId: string;
+    readonly language: string;
+    readonly entryFile: string;
+    readonly files: readonly WorkspaceFileInput[];
+    readonly executionMode: Extract<InternalExecutionMode, 'PRACTICE_ORACLE_BATCH' | 'PRACTICE_GENERATOR_ORACLE'>;
+    readonly stdin?: string | undefined;
+    readonly correlationId: string;
+  }): Promise<ExecutionQueuedResponse> {
+    const now = new Date();
+    const language = validateLanguage(input.language);
+    const entryFile = safePath(input.entryFile);
+    validateFiles(input.files, this.env);
+
+    if (!input.files.some((file) => file.path === entryFile)) {
+      throw workspaceFileInvalid('Reference solution entry file is missing');
+    }
+
+    const workspace = await this.repository.createEphemeralPracticeWorkspace({
+      userId: input.userId,
+      practiceProblemId: input.practiceProblemId,
+      language,
+      entryFile,
+      files: input.files,
+      now,
+    });
+
+    if (!workspace) {
+      throw workspaceNotFound();
+    }
+
+    const queuedBefore = new Date(now.getTime() - (this.env.CODE_EXECUTION_TIMEOUT_MS * this.env.CODE_EXECUTION_MAX_ATTEMPTS) - STALE_EXECUTION_GRACE_MS);
+    const runningBefore = new Date(now.getTime() - this.env.CODE_EXECUTION_TIMEOUT_MS - STALE_EXECUTION_GRACE_MS);
+    await this.repository.recoverStaleExecutionsForUser({
+      userId: input.userId,
+      queuedBefore,
+      runningBefore,
+      recoveredAt: now,
+    });
+
+    const activeExecutions = await this.repository.countActiveExecutions(input.userId);
+    if (activeExecutions >= this.env.CODE_EXECUTION_MAX_ACTIVE_PER_USER) {
+      throw executionActiveLimitExceeded();
+    }
+
+    const execution = await this.repository.createExecution({
+      workspaceId: workspace.id,
+      userId: input.userId,
+      language,
+      entryFile,
+      filesSnapshotJson: { files: input.files } as Prisma.InputJsonValue,
+      jobId: randomUUID(),
+      idempotencyKey: randomUUID(),
+      correlationId: input.correlationId,
+      now,
+    });
+    const message: AsyncMessage<CodeExecutionRequestedPayload> = {
+      jobId: execution.jobId,
+      idempotencyKey: execution.idempotencyKey,
+      correlationId: input.correlationId,
+      requestedByUserId: input.userId,
+      createdAt: now.toISOString(),
+      payload: {
+        executionId: execution.id,
+        workspaceId: workspace.id,
+        language,
+        files: input.files,
+        entryFile,
+        executionMode: input.executionMode,
+        ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+      },
+    };
+
+    try {
+      this.publisher.publishExecutionRequested(message);
+    } catch (error) {
+      await this.repository.finishExecution({
+        executionId: execution.id,
+        status: ExecutionStatus.FAILED,
+        exitCode: null,
+        stdout: '',
+        stderr: 'Unable to dispatch execution job.',
+        durationMs: 0,
+        memoryBytes: null,
+        errorCode: 'EXECUTION_DISPATCH_FAILED',
+        finishedAt: now,
+      });
+      this.logger.error({ error, userId: input.userId, executionId: execution.id, correlationId: input.correlationId }, 'practice authoring execution dispatch failed');
+      throw error;
+    }
 
     return { id: execution.id, status: execution.status };
   }

@@ -72,7 +72,7 @@ export interface CodeExecutionRequestedPayload extends AsyncMessagePayload {
   readonly language: string;
   readonly files: readonly CodeExecutionFile[];
   readonly entryFile: string;
-  readonly executionMode?: 'DIRECT' | 'FUNCTION';
+  readonly executionMode?: 'DIRECT' | 'FUNCTION' | 'PRACTICE_ORACLE_BATCH' | 'PRACTICE_GENERATOR_ORACLE';
   readonly stdin?: string;
 }
 
@@ -149,6 +149,10 @@ export interface CodeJudgeRequestedPayload extends AsyncMessagePayload {
 export {
   PRACTICE_FUNCTION_ADAPTER_PATH,
   PRACTICE_FUNCTION_ADAPTER_SOURCE,
+  PRACTICE_GENERATOR_ORACLE_ADAPTER_PATH,
+  PRACTICE_GENERATOR_ORACLE_ADAPTER_SOURCE,
+  PRACTICE_ORACLE_BATCH_ADAPTER_PATH,
+  PRACTICE_ORACLE_BATCH_ADAPTER_SOURCE,
 } from './practice-function-adapter';
 
 export interface CodeJudgeStartedPayload extends AsyncMessagePayload {

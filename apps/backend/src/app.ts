@@ -156,7 +156,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
       publishJudgeRequested: () => undefined,
     } satisfies CodeJudgeMessagePublisher);
   const judgeService = new JudgeService(prisma, judgeRepository, judgePublisher, env, logger, learningService, notificationService);
-  const practiceService = new PracticeService(prisma, practiceRepository, judgeService, env);
+  const practiceService = new PracticeService(prisma, practiceRepository, judgeService, codeExecutionService, env, logger);
   const quizService = new QuizService(prisma, quizRepository, learningService);
   const videoTranscriptService = new VideoTranscriptService(prisma, videoTranscriptRepository);
   const projectGradingPublisher =

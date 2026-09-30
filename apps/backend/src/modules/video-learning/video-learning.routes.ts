@@ -28,6 +28,7 @@ export function createInstructorVideoLearningRouter(controller: VideoLearningCon
 
   router.post('/videos/:videoAssetId/checkpoints', ...instructorOnly, asyncHandler(controller.createCheckpoint));
   router.put('/lessons/:lessonId/code-along', ...instructorOnly, asyncHandler(controller.upsertCodeAlongConfig));
+  router.get('/practice-problems/linkable', ...instructorOnly, asyncHandler(controller.listLinkablePracticeProblems));
   router.get('/videos/:videoAssetId/checkpoints', ...instructorOnly, asyncHandler(controller.listCheckpoints));
   router.patch('/checkpoints/:checkpointId', ...instructorOnly, asyncHandler(controller.updateCheckpoint));
   router.put('/checkpoints/:checkpointId/practice-step', ...instructorOnly, asyncHandler(controller.updatePracticeStepConfig));

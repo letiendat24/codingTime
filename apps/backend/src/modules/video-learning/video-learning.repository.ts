@@ -4,6 +4,7 @@ import {
   EnrollmentStatus,
   LearningActivityType,
   LessonType,
+  PracticeProblemStatus,
   VideoAssetStatus,
   VideoPracticeBehavior,
   VideoPracticeVerificationMode,
@@ -55,7 +56,17 @@ export class VideoLearningRepository {
         },
         progress: { where: { studentId }, take: 1 },
         checkpoints: {
-          include: { progress: { where: { studentId }, take: 1 } },
+          include: {
+            progress: { where: { studentId }, take: 1 },
+            practiceProblem: {
+              include: {
+                testCases: {
+                  where: { visibility: 'PUBLIC' },
+                  orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+                },
+              },
+            },
+          },
           orderBy: [{ timestampSeconds: 'asc' }, { position: 'asc' }, { createdAt: 'asc' }],
         },
         codeSnapshots: {
@@ -88,7 +99,17 @@ export class VideoLearningRepository {
       include: {
         progress: { where: { studentId }, take: 1 },
         checkpoints: {
-          include: { progress: { where: { studentId }, take: 1 } },
+          include: {
+            progress: { where: { studentId }, take: 1 },
+            practiceProblem: {
+              include: {
+                testCases: {
+                  where: { visibility: 'PUBLIC' },
+                  orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+                },
+              },
+            },
+          },
           orderBy: [{ timestampSeconds: 'asc' }, { position: 'asc' }, { createdAt: 'asc' }],
         },
         codeSnapshots: {
@@ -247,6 +268,14 @@ export class VideoLearningRepository {
             testCases: true,
           },
         },
+        practiceProblem: {
+          include: {
+            testCases: {
+              where: { visibility: 'PUBLIC' },
+              orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+            },
+          },
+        },
         videoAsset: {
           include: {
             codeSnapshots: {
@@ -281,6 +310,14 @@ export class VideoLearningRepository {
             testCases: true,
           },
         },
+        practiceProblem: {
+          include: {
+            testCases: {
+              where: { visibility: 'PUBLIC' },
+              orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+            },
+          },
+        },
         videoAsset: {
           include: {
             codeSnapshots: {
@@ -300,6 +337,40 @@ export class VideoLearningRepository {
 
   async createCheckpoint(input: Prisma.VideoCheckpointUncheckedCreateInput) {
     return this.prisma.videoCheckpoint.create({ data: input });
+  }
+
+  async findLinkablePracticeProblemForInstructor(instructorId: string, problemId: string) {
+    return this.prisma.practiceProblem.findFirst({
+      where: {
+        id: problemId,
+        createdByUserId: instructorId,
+        status: PracticeProblemStatus.PUBLISHED,
+        archivedAt: null,
+      },
+      include: {
+        testCases: {
+          where: { visibility: 'PUBLIC' },
+          orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+        },
+      },
+    });
+  }
+
+  async listLinkablePracticeProblemsForInstructor(instructorId: string) {
+    return this.prisma.practiceProblem.findMany({
+      where: {
+        createdByUserId: instructorId,
+        status: PracticeProblemStatus.PUBLISHED,
+        archivedAt: null,
+      },
+      include: {
+        testCases: {
+          where: { visibility: 'PUBLIC' },
+          orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+        },
+      },
+      orderBy: [{ publishedAt: 'desc' }, { title: 'asc' }],
+    });
   }
 
   async findCheckpointAtMilestone(lessonId: string, videoAssetId: string, timestampSeconds: number) {
@@ -374,6 +445,14 @@ export class VideoLearningRepository {
         },
       },
       include: {
+        practiceProblem: {
+          include: {
+            testCases: {
+              where: { visibility: 'PUBLIC' },
+              orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+            },
+          },
+        },
         videoAsset: {
           include: {
             codeSnapshots: {
@@ -406,6 +485,14 @@ export class VideoLearningRepository {
         },
       },
       include: {
+        practiceProblem: {
+          include: {
+            testCases: {
+              where: { visibility: 'PUBLIC' },
+              orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+            },
+          },
+        },
         videoAsset: {
           include: {
             codeSnapshots: {
@@ -433,6 +520,25 @@ export class VideoLearningRepository {
         userId: studentId,
         checkpointId,
         workspaceId,
+      },
+      include: { result: true },
+    });
+  }
+
+  async findJudgeSubmissionForPracticeProblemStep(input: {
+    readonly studentId: string;
+    readonly checkpointId: string;
+    readonly workspaceId: string;
+    readonly submissionId: string;
+    readonly practiceProblemId: string;
+  }) {
+    return this.prisma.judgeSubmission.findFirst({
+      where: {
+        id: input.submissionId,
+        userId: input.studentId,
+        checkpointId: input.checkpointId,
+        workspaceId: input.workspaceId,
+        practiceProblemId: input.practiceProblemId,
       },
       include: { result: true },
     });

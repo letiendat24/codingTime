@@ -38,6 +38,10 @@ export const runWorkspaceSchema = z.object({
   input: z.unknown().optional(),
 });
 
+export const runVideoPracticeStepSchema = runWorkspaceSchema.extend({
+  workspaceId: z.string().uuid(),
+});
+
 export const executionHistoryQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().min(1).max(50).default(20),
@@ -47,4 +51,5 @@ export type WorkspaceFileInput = z.infer<typeof workspaceFileSchema>;
 export type SaveWorkspaceFilesInput = z.infer<typeof saveWorkspaceFilesSchema>;
 export type ImportSnapshotInput = z.infer<typeof importSnapshotSchema>;
 export type RunWorkspaceInput = z.infer<typeof runWorkspaceSchema>;
+export type RunVideoPracticeStepInput = z.infer<typeof runVideoPracticeStepSchema>;
 export type ExecutionHistoryQuery = z.infer<typeof executionHistoryQuerySchema>;

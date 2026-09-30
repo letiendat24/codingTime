@@ -3,7 +3,14 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { CodeExecutionFile } from '@codesync/shared';
 import type { CodeExecutionWorkerEnv } from './config';
-import { PRACTICE_FUNCTION_ADAPTER_PATH, PRACTICE_FUNCTION_ADAPTER_SOURCE } from './practice-function-adapter';
+import {
+  PRACTICE_FUNCTION_ADAPTER_PATH,
+  PRACTICE_FUNCTION_ADAPTER_SOURCE,
+  PRACTICE_GENERATOR_ORACLE_ADAPTER_PATH,
+  PRACTICE_GENERATOR_ORACLE_ADAPTER_SOURCE,
+  PRACTICE_ORACLE_BATCH_ADAPTER_PATH,
+  PRACTICE_ORACLE_BATCH_ADAPTER_SOURCE,
+} from './practice-function-adapter';
 import type { RuntimeDefinition } from './runtimes';
 
 export interface SandboxResult {
@@ -49,15 +56,36 @@ async function writePracticeFunctionAdapter(root: string) {
   await writeFile(target, PRACTICE_FUNCTION_ADAPTER_SOURCE, 'utf8');
 }
 
+async function writePracticeOracleBatchAdapter(root: string) {
+  const target = join(root, PRACTICE_ORACLE_BATCH_ADAPTER_PATH);
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, PRACTICE_ORACLE_BATCH_ADAPTER_SOURCE, 'utf8');
+}
+
+async function writePracticeGeneratorOracleAdapter(root: string) {
+  const target = join(root, PRACTICE_GENERATOR_ORACLE_ADAPTER_PATH);
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, PRACTICE_GENERATOR_ORACLE_ADAPTER_SOURCE, 'utf8');
+}
+
+type CodeExecutionMode = 'DIRECT' | 'FUNCTION' | 'PRACTICE_ORACLE_BATCH' | 'PRACTICE_GENERATOR_ORACLE';
+
+function adapterPathForMode(mode: CodeExecutionMode | undefined, entryFile: string) {
+  if (mode === 'FUNCTION') return PRACTICE_FUNCTION_ADAPTER_PATH;
+  if (mode === 'PRACTICE_ORACLE_BATCH') return PRACTICE_ORACLE_BATCH_ADAPTER_PATH;
+  if (mode === 'PRACTICE_GENERATOR_ORACLE') return PRACTICE_GENERATOR_ORACLE_ADAPTER_PATH;
+  return entryFile;
+}
+
 export function buildDockerRunArgs(input: {
   readonly containerName: string;
   readonly workDirectory: string;
   readonly runtime: RuntimeDefinition;
   readonly entryFile: string;
-  readonly executionMode?: 'DIRECT' | 'FUNCTION';
+  readonly executionMode?: CodeExecutionMode;
   readonly env: CodeExecutionWorkerEnv;
 }) {
-  const entryFile = input.executionMode === 'FUNCTION' ? PRACTICE_FUNCTION_ADAPTER_PATH : input.entryFile;
+  const entryFile = adapterPathForMode(input.executionMode, input.entryFile);
   return [
     'run',
     '--rm',
@@ -77,6 +105,8 @@ export function buildDockerRunArgs(input: {
     '/tmp:rw,noexec,nosuid,size=16m',
     '--env',
     `CODESYNC_ENTRY_FILE=${input.entryFile}`,
+    '--env',
+    `CODESYNC_MAX_OUTPUT_BYTES=${input.env.CODE_EXECUTION_MAX_OUTPUT_BYTES}`,
     '--workdir',
     '/workspace',
     '--volume',
@@ -92,7 +122,7 @@ export async function runInDockerSandbox(input: {
   readonly runtime: RuntimeDefinition;
   readonly entryFile: string;
   readonly files: readonly CodeExecutionFile[];
-  readonly executionMode?: 'DIRECT' | 'FUNCTION';
+  readonly executionMode?: CodeExecutionMode;
   readonly stdin?: string;
   readonly env: CodeExecutionWorkerEnv;
 }): Promise<SandboxResult> {
@@ -108,6 +138,10 @@ export async function runInDockerSandbox(input: {
   await writeWorkspaceFiles(workDirectory, input.files);
   if (input.executionMode === 'FUNCTION') {
     await writePracticeFunctionAdapter(workDirectory);
+  } else if (input.executionMode === 'PRACTICE_ORACLE_BATCH') {
+    await writePracticeOracleBatchAdapter(workDirectory);
+  } else if (input.executionMode === 'PRACTICE_GENERATOR_ORACLE') {
+    await writePracticeGeneratorOracleAdapter(workDirectory);
   }
 
   const dockerArgs = buildDockerRunArgs({

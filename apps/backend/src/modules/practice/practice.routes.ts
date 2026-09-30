@@ -1,7 +1,7 @@
 import { RoleName } from '@prisma/client';
 import { Router } from 'express';
 import type { Env } from '../../config';
-import { requireAuth, requireRole } from '../../middlewares/auth.middleware';
+import { requireAnyRole, requireAuth, requireRole } from '../../middlewares/auth.middleware';
 import { rateLimit, type RateLimiterStore } from '../../middlewares/rate-limit';
 import { asyncHandler } from '../../shared/async-handler';
 import type { TokenService } from '../auth/token.service';
@@ -37,6 +37,7 @@ export function createPracticeRouter(
 export function createInstructorPracticeRouter(controller: PracticeController, tokenService: TokenService) {
   const router = Router();
   const instructorOnly = [requireAuth(tokenService), requireRole(RoleName.INSTRUCTOR)] as const;
+  const instructorOrAdmin = [requireAuth(tokenService), requireAnyRole([RoleName.INSTRUCTOR, RoleName.ADMIN])] as const;
 
   router.get('/practice/problems', ...instructorOnly, asyncHandler(controller.listInstructorProblems));
   router.post('/practice/problems', ...instructorOnly, asyncHandler(controller.createProblem));
@@ -48,9 +49,15 @@ export function createInstructorPracticeRouter(controller: PracticeController, t
   router.post('/practice/problems/:problemId/archive', ...instructorOnly, asyncHandler(controller.archiveProblem));
   router.post('/practice/problems/:problemId/test-cases', ...instructorOnly, asyncHandler(controller.createTestCase));
   router.post('/practice/problems/:problemId/test-cases/import', ...instructorOnly, asyncHandler(controller.importTestCases));
+  router.post('/practice/problems/:problemId/test-generation/import-preview', ...instructorOnly, asyncHandler(controller.previewInputImport));
+  router.post('/practice/problems/:problemId/test-generation/generator-preview', ...instructorOnly, asyncHandler(controller.previewGenerator));
+  router.post('/practice/problems/:problemId/test-generation/commit', ...instructorOnly, asyncHandler(controller.commitGeneratedTests));
+  router.get('/practice/executions/:executionId', ...instructorOnly, asyncHandler(controller.getAuthoringExecution));
   router.post('/practice/problems/:problemId/test-cases/reorder', ...instructorOnly, asyncHandler(controller.reorderTestCases));
   router.patch('/practice/test-cases/:testCaseId', ...instructorOnly, asyncHandler(controller.updateTestCase));
-  router.delete('/practice/test-cases/:testCaseId', ...instructorOnly, asyncHandler(controller.deleteTestCase));
+  router.delete('/practice/problems/:problemId/test-cases/hidden', ...instructorOrAdmin, asyncHandler(controller.deleteHiddenTestCases));
+  router.delete('/practice/problems/:problemId/test-cases/hidden/source/:source', ...instructorOrAdmin, asyncHandler(controller.deleteHiddenTestCasesBySource));
+  router.delete('/practice/test-cases/:testCaseId', ...instructorOrAdmin, asyncHandler(controller.deleteTestCase));
 
   return router;
 }

@@ -231,6 +231,9 @@ export class JudgeRepository {
                 checkpoints: {
                   where: { id: checkpointId, practiceEnabled: true },
                   include: {
+                    practiceProblem: {
+                      include: { testCases: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] } },
+                    },
                     codingConfig: {
                       include: { testCases: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] } },
                     },
@@ -377,7 +380,7 @@ export class JudgeRepository {
 
     let completedCheckpoint = false;
 
-    if (submission.practiceProblemId) {
+    if (submission.practiceProblemId && !submission.checkpointId) {
       const previous = await this.prisma.practiceProgress.findUnique({
         where: { studentId_practiceProblemId: { studentId: submission.userId, practiceProblemId: submission.practiceProblemId } },
       });

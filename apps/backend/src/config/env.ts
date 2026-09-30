@@ -30,7 +30,7 @@ const environmentSchema = z.object({
   WORKSPACE_MAX_REVISIONS: z.coerce.number().int().min(1).max(50).default(10),
   GEMINI_API_KEY: z.string().min(1).optional(),
   GEMINI_MODEL: z.string().trim().min(1).default('gemini-3.6-flash'),
-  AI_VERIFICATION_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(20_000),
+  AI_VERIFICATION_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(60_000),
   AI_VERIFICATION_MAX_INPUT_BYTES: z.coerce.number().int().min(10_000).max(200_000).default(60_000),
   AI_VERIFICATION_COOLDOWN_MS: z.coerce.number().int().min(0).max(60_000).default(2_000),
   CODE_EXECUTION_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(5_000),

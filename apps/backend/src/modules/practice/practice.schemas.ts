@@ -13,6 +13,14 @@ export const practiceTestCaseParamsSchema = z.object({
   testCaseId: z.string().uuid(),
 });
 
+export const practiceExecutionParamsSchema = z.object({
+  executionId: z.string().uuid(),
+});
+
+export const practiceHiddenTestCaseSourceParamsSchema = practiceProblemIdParamsSchema.extend({
+  source: z.enum(['IMPORT', 'GENERATOR']),
+});
+
 export const workspaceFileSchema = z.object({
   path: z.string().min(1).max(255),
   content: z.string(),
@@ -93,6 +101,30 @@ export const importPracticeTestCasesSchema = z.object({
   testCases: z.array(practiceTestCaseInputSchema).min(1).max(100),
 });
 
+export const practiceGeneratedTestInputSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  input: z.unknown(),
+  weight: z.number().positive().max(1000).default(1),
+});
+
+export const previewPracticeInputImportSchema = z.object({
+  version: z.literal(1),
+  visibility: z.nativeEnum(TestCaseVisibility).default(TestCaseVisibility.HIDDEN),
+  tests: z.array(practiceGeneratedTestInputSchema).min(1).max(100),
+});
+
+export const previewPracticeGeneratorSchema = z.object({
+  generatorSource: z.string().trim().min(1).max(50_000),
+  visibility: z.nativeEnum(TestCaseVisibility).default(TestCaseVisibility.HIDDEN),
+});
+
+export const commitPracticeGeneratedTestsSchema = z.object({
+  executionId: z.string().uuid(),
+  mode: z.enum(['APPEND', 'REPLACE_HIDDEN']).default('APPEND'),
+  visibility: z.nativeEnum(TestCaseVisibility).default(TestCaseVisibility.HIDDEN),
+  source: z.enum(['EXAMPLE', 'IMPORT', 'GENERATOR']).default('IMPORT'),
+});
+
 export type InstructorPracticeListQuery = z.infer<typeof instructorPracticeListQuerySchema>;
 export type StudentPracticeListQuery = z.infer<typeof studentPracticeListQuerySchema>;
 export type PracticeSubmissionListQuery = z.infer<typeof practiceSubmissionListQuerySchema>;
@@ -101,3 +133,7 @@ export type UpdatePracticeProblemInput = z.infer<typeof updatePracticeProblemSch
 export type PracticeTestCaseInput = z.infer<typeof practiceTestCaseInputSchema>;
 export type PracticeTestCaseUpdateInput = z.infer<typeof practiceTestCaseUpdateSchema>;
 export type ImportPracticeTestCasesInput = z.infer<typeof importPracticeTestCasesSchema>;
+export type PreviewPracticeInputImportInput = z.infer<typeof previewPracticeInputImportSchema>;
+export type PreviewPracticeGeneratorInput = z.infer<typeof previewPracticeGeneratorSchema>;
+export type CommitPracticeGeneratedTestsInput = z.infer<typeof commitPracticeGeneratedTestsSchema>;
+export type PracticeHiddenTestCaseSource = z.infer<typeof practiceHiddenTestCaseSourceParamsSchema>['source'];

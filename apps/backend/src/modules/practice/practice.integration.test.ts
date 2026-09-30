@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  ExecutionStatus,
   JudgeSubmissionStatus,
   LearningActivityType,
   PracticeDifficulty,
@@ -14,7 +15,7 @@ import type { Express } from 'express';
 import type { Client as MinioClient } from 'minio';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { type AsyncMessage, type CodeJudgeCompletedPayload, type CodeJudgeRequestedPayload } from '@codesync/shared';
+import { type AsyncMessage, type CodeExecutionRequestedPayload, type CodeJudgeCompletedPayload, type CodeJudgeRequestedPayload } from '@codesync/shared';
 import { createApp } from '../../app';
 import type { Env } from '../../config';
 import { createLogger } from '../../shared/logger';
@@ -107,6 +108,7 @@ const storage = { presignedGetObject: async () => 'http://localhost:9000/playbac
 const logger = createLogger('test');
 let app: Express;
 let publishedMessages: AsyncMessage<CodeJudgeRequestedPayload>[] = [];
+let publishedExecutionMessages: AsyncMessage<CodeExecutionRequestedPayload>[] = [];
 
 async function seedRoles() {
   for (const name of [RoleName.STUDENT, RoleName.INSTRUCTOR, RoleName.ADMIN]) {
@@ -118,6 +120,8 @@ async function clearData() {
   await prisma.testCaseResult.deleteMany();
   await prisma.judgeResult.deleteMany();
   await prisma.judgeSubmission.deleteMany();
+  await prisma.executionResult.deleteMany();
+  await prisma.executionRequest.deleteMany();
   await prisma.practiceProgress.deleteMany();
   await prisma.practiceProblemTestCase.deleteMany();
   await prisma.workspaceFile.deleteMany();
@@ -156,6 +160,28 @@ function createJudgeService() {
   );
 }
 
+async function createTwoSumDraftProblem(instructor: TestUser, slug = `two-sum-${randomUUID()}`) {
+  return request(app)
+    .post('/api/v1/instructor/practice/problems')
+    .set('Authorization', `Bearer ${instructor.token}`)
+    .send({
+      title: 'Two Sum',
+      slug,
+      description: 'Return indexes of the two numbers that add to target.',
+      inputFormat: 'solution(input) receives { nums: number[], target: number }.',
+      outputFormat: 'Return an array of two indexes.',
+      constraints: 'Exactly one solution exists.',
+      difficulty: PracticeDifficulty.EASY,
+      starterFiles: [{ path: 'index.js', content: 'function solution(input) {\n  return [];\n}\n\nmodule.exports = { solution };\n' }],
+      referenceFiles: [{
+        path: 'index.js',
+        content: 'function solution(input) {\n  const seen = new Map();\n  for (let index = 0; index < input.nums.length; index += 1) {\n    const need = input.target - input.nums[index];\n    if (seen.has(need)) return [seen.get(need), index];\n    seen.set(input.nums[index], index);\n  }\n  return [];\n}\n\nmodule.exports = { solution };\n',
+      }],
+      executionContract: 'FUNCTION',
+      tags: ['arrays'],
+    });
+}
+
 describe('practice center integration', () => {
   beforeAll(async () => {
     await prisma.$connect();
@@ -166,12 +192,14 @@ describe('practice center integration', () => {
     await clearData();
     await seedRoles();
     publishedMessages = [];
+    publishedExecutionMessages = [];
     app = createApp({
       env: testEnv,
       logger,
       prisma,
       storage,
       judgePublisher: { publishJudgeRequested: (message) => publishedMessages.push(message) },
+      codeExecutionPublisher: { publishExecutionRequested: (message) => publishedExecutionMessages.push(message) },
     });
   });
 
@@ -371,5 +399,361 @@ describe('practice center integration', () => {
     expect(JSON.stringify(stalePublish.body)).toContain('Problem content changed after the last successful validation');
     expect(revalidated.body.valid).toBe(true);
     expect(published.body.problem.status).toBe(PracticeProblemStatus.PUBLISHED);
+  });
+
+  it('generates practice expected outputs from reference execution before committing tests', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+
+    const created = await request(app)
+      .post('/api/v1/instructor/practice/problems')
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({
+        title: 'Double value',
+        slug: 'double-value',
+        description: 'Return input.value * 2.',
+        inputFormat: 'solution(input) receives { "value": number }.',
+        outputFormat: 'Return a number.',
+        constraints: 'value is an integer.',
+        difficulty: PracticeDifficulty.EASY,
+        starterFiles: [{ path: 'index.js', content: 'function solution(input) {\n  return input.value * 2;\n}\n\nmodule.exports = { solution };\n' }],
+        referenceFiles: [{ path: 'index.js', content: 'function solution(input) {\n  return input.value * 2;\n}\n\nmodule.exports = { solution };\n' }],
+        executionContract: 'FUNCTION',
+        tags: ['math'],
+      });
+
+    const preview = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${created.body.problem.id}/test-generation/import-preview`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .set('x-correlation-id', 'practice-generation')
+      .send({
+        version: 1,
+        visibility: TestCaseVisibility.HIDDEN,
+        tests: [
+          { name: 'Positive', input: { value: 2 }, weight: 20 },
+          { name: 'Negative', input: { value: -3 }, weight: 20 },
+        ],
+      });
+
+    const commitBeforeExecution = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${created.body.problem.id}/test-generation/commit`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({
+        executionId: preview.body.executionId,
+        mode: 'APPEND',
+        visibility: TestCaseVisibility.HIDDEN,
+        source: 'IMPORT',
+      });
+
+    await prisma.executionResult.create({
+      data: {
+        executionRequestId: preview.body.executionId,
+        exitCode: 0,
+        stdout: JSON.stringify({
+          tests: [
+            { name: 'Positive', input: { value: 2 }, weight: 20, expectedOutput: '4' },
+            { name: 'Negative', input: { value: -3 }, weight: 20, expectedOutput: '-6' },
+          ],
+        }),
+        stderr: '',
+        durationMs: 25,
+      },
+    });
+    await prisma.executionRequest.update({
+      where: { id: preview.body.executionId },
+      data: { status: ExecutionStatus.SUCCEEDED, startedAt: new Date(), completedAt: new Date() },
+    });
+
+    const executionDetail = await request(app)
+      .get(`/api/v1/instructor/practice/executions/${preview.body.executionId}`)
+      .set('Authorization', `Bearer ${instructor.token}`);
+    const committed = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${created.body.problem.id}/test-generation/commit`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({
+        executionId: preview.body.executionId,
+        mode: 'APPEND',
+        visibility: TestCaseVisibility.HIDDEN,
+        source: 'IMPORT',
+      });
+    const publicTest = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${created.body.problem.id}/test-cases`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({ name: 'Public sample', visibility: TestCaseVisibility.PUBLIC, input: '{"value":1}', expectedOutput: '2', weight: 10 });
+    const validated = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${created.body.problem.id}/validate`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send();
+    await request(app)
+      .patch(`/api/v1/instructor/practice/problems/${created.body.problem.id}`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({
+        referenceFiles: [{ path: 'index.js', content: 'function solution(input) {\n  return input.value * 3;\n}\n\nmodule.exports = { solution };\n' }],
+      });
+    const staleValidation = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${created.body.problem.id}/validate`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send();
+
+    expect(preview.status).toBe(202);
+    expect(preview.body.status).toBe(ExecutionStatus.QUEUED);
+    expect(preview.body.referenceFingerprint).toEqual(expect.any(String));
+    expect(commitBeforeExecution.status).toBe(400);
+    expect(publishedExecutionMessages).toHaveLength(1);
+    expect(publishedExecutionMessages[0]!.correlationId).toBe('practice-generation');
+    expect(publishedExecutionMessages[0]!.payload.executionId).toBe(preview.body.executionId);
+    expect(publishedExecutionMessages[0]!.payload.executionMode).toBe('PRACTICE_ORACLE_BATCH');
+    expect(publishedExecutionMessages[0]!.payload.stdin).toContain('"value":2');
+    expect(executionDetail.body.execution.status).toBe(ExecutionStatus.SUCCEEDED);
+    expect(committed.status).toBe(201);
+    expect(committed.body.committed).toBe(2);
+    expect(committed.body.testCases.filter((test: { readonly expectedOutputSource?: string }) => test.expectedOutputSource === 'REFERENCE_SOLUTION')).toHaveLength(2);
+    expect(publicTest.status).toBe(201);
+    expect(validated.body.valid).toBe(true);
+    expect(staleValidation.body.valid).toBe(false);
+    expect(staleValidation.body.issues).toContain('Expected outputs are stale. Regenerate expected outputs from the current reference solution.');
+  });
+
+  it('queues public example expected-output preview without persisting tests', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+
+    const created = await request(app)
+      .post('/api/v1/instructor/practice/problems')
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send({
+        title: 'Two Sum',
+        slug: 'two-sum-public-preview',
+        description: 'Return indexes of the two numbers that add to target.',
+        inputFormat: 'solution(input) receives { nums: number[], target: number }.',
+        outputFormat: 'Return an array of two indexes.',
+        constraints: 'Exactly one solution exists.',
+        difficulty: PracticeDifficulty.EASY,
+        starterFiles: [{ path: 'index.js', content: 'function solution(input) {\n  return [];\n}\n\nmodule.exports = { solution };\n' }],
+        referenceFiles: [{
+          path: 'index.js',
+          content: 'function solution(input) {\n  const seen = new Map();\n  for (let index = 0; index < input.nums.length; index += 1) {\n    const need = input.target - input.nums[index];\n    if (seen.has(need)) return [seen.get(need), index];\n    seen.set(input.nums[index], index);\n  }\n  return [];\n}\n\nmodule.exports = { solution };\n',
+        }],
+        executionContract: 'FUNCTION',
+        tags: ['arrays'],
+      });
+    await prisma.workspace.create({
+      data: {
+        userId: instructor.id,
+        practiceProblemId: created.body.problem.id,
+        language: 'javascript',
+        entryFile: 'index.js',
+        lastOpenedAt: new Date(),
+        files: {
+          create: [{ path: 'index.js', content: 'module.exports = { solution: () => [] };' }],
+        },
+      },
+    });
+
+    const preview = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${created.body.problem.id}/test-generation/import-preview`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .set('x-correlation-id', 'afa50d19-78b8-46ff-bb8c-8ba9ad623c46')
+      .send({
+        version: 1,
+        visibility: TestCaseVisibility.PUBLIC,
+        tests: [
+          {
+            name: 'Example 2',
+            input: {
+              nums: [3, 2, 4],
+              target: 6,
+            },
+            weight: 10,
+          },
+        ],
+      });
+
+    expect(preview.status).toBe(202);
+    expect(preview.body).toMatchObject({
+      executionId: expect.any(String),
+      status: ExecutionStatus.QUEUED,
+      visibility: TestCaseVisibility.PUBLIC,
+      source: 'IMPORT',
+      referenceFingerprint: expect.any(String),
+      generationVersion: 'practice-test-generation-v1',
+    });
+    expect(publishedExecutionMessages).toHaveLength(1);
+    expect(publishedExecutionMessages[0]!.correlationId).toBe('afa50d19-78b8-46ff-bb8c-8ba9ad623c46');
+    expect(publishedExecutionMessages[0]!.payload).toMatchObject({
+      executionId: preview.body.executionId,
+      language: 'javascript',
+      entryFile: 'index.js',
+      executionMode: 'PRACTICE_ORACLE_BATCH',
+    });
+    expect(JSON.parse(publishedExecutionMessages[0]!.payload.stdin ?? '')).toEqual({
+      tests: [
+        {
+          name: 'Example 2',
+          input: {
+            nums: [3, 2, 4],
+            target: 6,
+          },
+          weight: 10,
+        },
+      ],
+    });
+    const previewExecution = await prisma.executionRequest.findUniqueOrThrow({
+      where: { id: preview.body.executionId },
+      include: { workspace: true },
+    });
+    expect(previewExecution.workspace.practiceProblemId).toBeNull();
+    await expect(prisma.practiceProblemTestCase.count({ where: { practiceProblemId: created.body.problem.id } })).resolves.toBe(0);
+  });
+
+  it('deletes generated hidden tests by source, invalidates validation, and preserves student hidden-test isolation', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const student = await createUser([RoleName.STUDENT]);
+    const created = await createTwoSumDraftProblem(instructor, 'two-sum-hidden-delete');
+    const problemId = created.body.problem.id as string;
+
+    await prisma.practiceProblemTestCase.createMany({
+      data: [
+        {
+          practiceProblemId: problemId,
+          name: 'Example 1',
+          visibility: TestCaseVisibility.PUBLIC,
+          input: '{"nums":[2,7,11,15],"target":9}',
+          expectedOutput: '[0,1]',
+          source: 'EXAMPLE',
+          expectedOutputSource: 'REFERENCE_SOLUTION',
+          referenceFingerprint: created.body.problem.currentReferenceFingerprint,
+          generationVersion: 'practice-test-generation-v1',
+          weight: 10,
+          position: 1,
+        },
+        {
+          practiceProblemId: problemId,
+          name: 'Example 2',
+          visibility: TestCaseVisibility.PUBLIC,
+          input: '{"nums":[3,2,4],"target":6}',
+          expectedOutput: '[1,2]',
+          source: 'EXAMPLE',
+          expectedOutputSource: 'REFERENCE_SOLUTION',
+          referenceFingerprint: created.body.problem.currentReferenceFingerprint,
+          generationVersion: 'practice-test-generation-v1',
+          weight: 10,
+          position: 2,
+        },
+        ...Array.from({ length: 8 }, (_, index) => ({
+          practiceProblemId: problemId,
+          name: `Import Hidden ${index + 1}`,
+          visibility: TestCaseVisibility.HIDDEN,
+          input: JSON.stringify({ nums: [index, index + 10, index + 20], target: index + 10 }),
+          expectedOutput: '[0,1]',
+          source: 'IMPORT',
+          expectedOutputSource: 'REFERENCE_SOLUTION',
+          referenceFingerprint: created.body.problem.currentReferenceFingerprint,
+          generationVersion: 'practice-test-generation-v1',
+          weight: 10,
+          position: index + 3,
+        })),
+        ...Array.from({ length: 8 }, (_, index) => ({
+          practiceProblemId: problemId,
+          name: `Generator Hidden ${index + 1}`,
+          visibility: TestCaseVisibility.HIDDEN,
+          input: JSON.stringify({ nums: [index + 100, index + 200, index + 300], target: index + 300 }),
+          expectedOutput: '[0,1]',
+          source: 'GENERATOR',
+          expectedOutputSource: 'REFERENCE_SOLUTION',
+          referenceFingerprint: created.body.problem.currentReferenceFingerprint,
+          generationVersion: 'practice-test-generation-v1',
+          weight: 10,
+          position: index + 11,
+        })),
+      ],
+    });
+
+    const before = await request(app)
+      .get(`/api/v1/instructor/practice/problems/${problemId}`)
+      .set('Authorization', `Bearer ${instructor.token}`);
+    const validated = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${problemId}/validate`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send();
+    const deletedGenerator = await request(app)
+      .delete(`/api/v1/instructor/practice/problems/${problemId}/test-cases/hidden/source/GENERATOR`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send();
+    const stalePublish = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${problemId}/publish`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send();
+    const revalidated = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${problemId}/validate`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send();
+    const published = await request(app)
+      .post(`/api/v1/instructor/practice/problems/${problemId}/publish`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .send();
+    const studentDetail = await request(app)
+      .get('/api/v1/practice/problems/two-sum-hidden-delete')
+      .set('Authorization', `Bearer ${student.token}`);
+
+    expect(before.body.problem.testCases.filter((test: { readonly visibility: string }) => test.visibility === 'PUBLIC')).toHaveLength(2);
+    expect(before.body.problem.testCases.filter((test: { readonly visibility: string }) => test.visibility === 'HIDDEN')).toHaveLength(16);
+    expect(before.body.problem.testCases).toHaveLength(18);
+    expect(validated.body.valid).toBe(true);
+    expect(deletedGenerator.status).toBe(200);
+    expect(deletedGenerator.body.deleted).toBe(8);
+    expect(deletedGenerator.body.publicCount).toBe(2);
+    expect(deletedGenerator.body.hiddenCount).toBe(8);
+    expect(deletedGenerator.body.testCases).toHaveLength(10);
+    expect(deletedGenerator.body.testCases.some((test: { readonly source?: string }) => test.source === 'GENERATOR')).toBe(false);
+    expect(deletedGenerator.body.testCases.filter((test: { readonly source?: string }) => test.source === 'IMPORT')).toHaveLength(8);
+    expect((await prisma.practiceProblem.findUniqueOrThrow({ where: { id: problemId } })).validatedAt).toBeNull();
+    expect(stalePublish.status).toBe(422);
+    expect(JSON.stringify(stalePublish.body)).toContain('Problem content changed after the last successful validation');
+    expect(revalidated.body.valid).toBe(true);
+    expect(published.body.problem.status).toBe(PracticeProblemStatus.PUBLISHED);
+    expect(studentDetail.body.problem.publicTests).toHaveLength(2);
+    expect(JSON.stringify(studentDetail.body)).not.toContain('Import Hidden');
+    expect(JSON.stringify(studentDetail.body)).not.toContain('"nums":[0,10,20]');
+  });
+
+  it('protects hidden test deletion by role and ownership while allowing admins', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const otherInstructor = await createUser([RoleName.INSTRUCTOR]);
+    const student = await createUser([RoleName.STUDENT]);
+    const admin = await createUser([RoleName.ADMIN]);
+    const created = await createTwoSumDraftProblem(instructor, 'two-sum-hidden-delete-auth');
+    const problemId = created.body.problem.id as string;
+    const hidden = await prisma.practiceProblemTestCase.create({
+      data: {
+        practiceProblemId: problemId,
+        name: 'Generated hidden',
+        visibility: TestCaseVisibility.HIDDEN,
+        input: '{"nums":[1,5,9],"target":6}',
+        expectedOutput: '[0,1]',
+        source: 'GENERATOR',
+        expectedOutputSource: 'REFERENCE_SOLUTION',
+        referenceFingerprint: created.body.problem.currentReferenceFingerprint,
+        generationVersion: 'practice-test-generation-v1',
+        weight: 10,
+        position: 1,
+      },
+    });
+
+    const studentDelete = await request(app)
+      .delete(`/api/v1/instructor/practice/test-cases/${hidden.id}`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send();
+    const otherInstructorDelete = await request(app)
+      .delete(`/api/v1/instructor/practice/problems/${problemId}/test-cases/hidden`)
+      .set('Authorization', `Bearer ${otherInstructor.token}`)
+      .send();
+    const adminDelete = await request(app)
+      .delete(`/api/v1/instructor/practice/test-cases/${hidden.id}`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send();
+
+    expect(studentDelete.status).toBe(403);
+    expect(otherInstructorDelete.status).toBe(404);
+    expect(adminDelete.status).toBe(204);
+    await expect(prisma.practiceProblemTestCase.findUnique({ where: { id: hidden.id } })).resolves.toBeNull();
   });
 });

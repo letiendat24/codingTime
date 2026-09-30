@@ -25,7 +25,7 @@ import { Button } from '../../../design-system/components/button';
 import { Input } from '../../../design-system/components/input';
 import { Select } from '../../../design-system/components/select';
 import { Switch } from '../../../design-system/components/switch';
-import { type CodeSnapshotDetail, requestJson } from '../../../lib/api';
+import { type CodeSnapshotDetail, type LinkedPracticeProblemSummary, requestJson } from '../../../lib/api';
 import { formatTime, parseTimeString, findPreviousSnapshot } from '../../../lib/video-learning';
 import { useTheme } from '../../../providers/theme-provider';
 import { useToast } from '../../../providers/toast-provider';
@@ -79,8 +79,12 @@ interface CheckpointDetail {
   readonly practiceBehavior: VideoPracticeBehavior;
   readonly practiceVerificationMode: VideoPracticeVerificationMode;
   readonly practiceSnapshotId: string | null;
+  readonly practiceProblemId: string | null;
+  readonly practiceProblem?: LinkedPracticeProblemSummary | null;
   readonly practiceTargetFilePath: string | null;
 }
+
+type MilestoneKind = 'CODE_CHECKPOINT' | 'PRACTICE_PROBLEM';
 
 function detectMonacoLanguage(filePath: string, defaultLanguage: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase();
@@ -156,6 +160,8 @@ export function CodeAlongStudio({
   const [newFilePathInput, setNewFilePathInput] = useState('');
   const [isAddingFile, setIsAddingFile] = useState(false);
   const [studentTask, setStudentTask] = useState('');
+  const [milestoneKind, setMilestoneKind] = useState<MilestoneKind>('CODE_CHECKPOINT');
+  const [selectedPracticeProblemId, setSelectedPracticeProblemId] = useState('');
 
   // Milestone Override State
   const [showOverride, setShowOverride] = useState(false);
@@ -180,6 +186,14 @@ export function CodeAlongStudio({
     queryFn: () =>
       requestJson<{ readonly checkpoints: readonly CheckpointDetail[] }>(
         `/instructor/videos/${videoAssetId}/checkpoints`,
+      ),
+  });
+
+  const linkableProblemsQuery = useQuery({
+    queryKey: ['instructor-linkable-practice-problems'],
+    queryFn: () =>
+      requestJson<{ readonly problems: readonly LinkedPracticeProblemSummary[] }>(
+        '/instructor/practice-problems/linkable',
       ),
   });
 
@@ -219,6 +233,17 @@ export function CodeAlongStudio({
   const checkpoints = useMemo(() => {
     return checkpointsQuery.data?.checkpoints ?? [];
   }, [checkpointsQuery.data]);
+
+  const practiceOnlyCheckpoints = useMemo(() => {
+    const snapshotTimestamps = new Set(snapshots.map((snapshot) => snapshot.timestampSeconds));
+    return checkpoints
+      .filter((checkpoint) => checkpoint.practiceProblem && !snapshotTimestamps.has(checkpoint.timestampSeconds))
+      .sort((a, b) => a.timestampSeconds - b.timestampSeconds);
+  }, [checkpoints, snapshots]);
+
+  const linkableProblems = useMemo(() => {
+    return linkableProblemsQuery.data?.problems ?? [];
+  }, [linkableProblemsQuery.data]);
 
   // Save Lesson-level configuration
   const saveLessonConfigMutation = useMutation({
@@ -324,6 +349,62 @@ export function CodeAlongStudio({
   const saveSnapshotMutation = useMutation({
     mutationFn: async () => {
       const timestampSeconds = parseTimeString(snapshotTimeString);
+      const selectedProblem = linkableProblems.find((problem) => problem.id === selectedPracticeProblemId);
+
+      if (milestoneKind === 'PRACTICE_PROBLEM') {
+        if (!selectedProblem) {
+          throw new Error('Select a published practice problem for this milestone.');
+        }
+
+        const title = snapshotTitle.trim() || selectedProblem.title;
+        const latestCheckpoints = await requestJson<{ readonly checkpoints: readonly CheckpointDetail[] }>(
+          `/instructor/videos/${videoAssetId}/checkpoints`,
+        );
+        let matchingCheckpoint = latestCheckpoints.checkpoints.find((c) => c.timestampSeconds === timestampSeconds);
+        const required = (overrideBehavior === 'INHERIT' ? defaultPracticeBehavior : overrideBehavior) === 'REQUIRED';
+
+        if (!matchingCheckpoint) {
+          const createdCp = await requestJson<{ readonly checkpoint: CheckpointDetail }>(
+            `/instructor/videos/${videoAssetId}/checkpoints`,
+            {
+              method: 'POST',
+              body: JSON.stringify({
+                timestampSeconds,
+                type: 'INFO',
+                title,
+                description: studentTask.trim() || selectedProblem.description,
+                required,
+                pauseVideo: true,
+              }),
+            },
+          );
+          matchingCheckpoint = createdCp.checkpoint;
+        } else {
+          await requestJson(`/instructor/checkpoints/${matchingCheckpoint.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+              title,
+              description: studentTask.trim() || selectedProblem.description,
+              required,
+              pauseVideo: true,
+            }),
+          });
+        }
+
+        await requestJson(`/instructor/checkpoints/${matchingCheckpoint.id}/practice-step`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            configMode: 'MANUAL_OVERRIDE',
+            practiceEnabled: true,
+            practiceBehavior: required ? 'REQUIRED' : 'GUIDED',
+            practiceVerificationMode: 'TESTS',
+            practiceProblemId: selectedProblem.id,
+          }),
+        });
+
+        return { codeSnapshot: null };
+      }
+
       const payload = {
         timestampSeconds,
         title: snapshotTitle.trim() || null,
@@ -407,6 +488,8 @@ export function CodeAlongStudio({
     onSuccess: () => {
       setIsCreatingSnapshot(false);
       setEditingSnapshotId(null);
+      setMilestoneKind('CODE_CHECKPOINT');
+      setSelectedPracticeProblemId('');
       toast.success(editingSnapshotId ? 'Milestone updated' : 'Milestone snapshot captured');
       void queryClient.invalidateQueries({ queryKey: ['instructor-code-snapshots', videoAssetId] });
       void queryClient.invalidateQueries({ queryKey: ['instructor-video-checkpoints', videoAssetId] });
@@ -430,6 +513,18 @@ export function CodeAlongStudio({
     },
   });
 
+  const deleteCheckpoint = useMutation({
+    mutationFn: (checkpointId: string) =>
+      requestJson(`/instructor/checkpoints/${checkpointId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      toast.success('Practice milestone deleted');
+      void queryClient.invalidateQueries({ queryKey: ['instructor-video-checkpoints', videoAssetId] });
+    },
+    onError: (error) => {
+      toast.error('Failed to delete practice milestone', error instanceof Error ? error.message : undefined);
+    },
+  });
+
   const startCreatingSnapshot = () => {
     const formattedCurrentTime = formatTime(currentVideoTimeSeconds);
     const prevSnapshot = findPreviousSnapshot(currentVideoTimeSeconds, snapshots);
@@ -438,6 +533,8 @@ export function CodeAlongStudio({
     setSnapshotTimeString(formattedCurrentTime);
     setSnapshotTitle(`Milestone at ${formattedCurrentTime}`);
     setStudentTask('');
+    setMilestoneKind('CODE_CHECKPOINT');
+    setSelectedPracticeProblemId('');
     setShowOverride(false);
     setIsOverridden(false);
     setOverrideVerification('INHERIT');
@@ -465,6 +562,8 @@ export function CodeAlongStudio({
 
     const matchingCp = checkpoints.find((c) => c.timestampSeconds === snap.timestampSeconds);
     setStudentTask(matchingCp?.description ?? '');
+    setMilestoneKind('CODE_CHECKPOINT');
+    setSelectedPracticeProblemId('');
 
     if (matchingCp?.practiceConfigMode === 'MANUAL_OVERRIDE') {
       setIsOverridden(true);
@@ -813,29 +912,93 @@ export function CodeAlongStudio({
               </div>
             </div>
 
+            <div className="grid gap-3 sm:grid-cols-12">
+              <div className="sm:col-span-4">
+                <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Milestone Type</label>
+                <Select
+                  value={milestoneKind}
+                  onChange={(event) => setMilestoneKind(event.target.value as MilestoneKind)}
+                  disabled={Boolean(editingSnapshotId)}
+                  options={[
+                    { label: 'Code Checkpoint', value: 'CODE_CHECKPOINT' },
+                    { label: 'Practice Problem', value: 'PRACTICE_PROBLEM' },
+                  ]}
+                />
+              </div>
+              <div className="sm:col-span-8">
+                <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Student Description</label>
+                <Input
+                  value={studentTask}
+                  onChange={(event) => setStudentTask(event.target.value)}
+                  placeholder="What should students complete at this point?"
+                  className="text-xs"
+                />
+              </div>
+            </div>
+
+            {milestoneKind === 'PRACTICE_PROBLEM' ? (
+              <div className="grid gap-3 rounded-lg border border-border/70 bg-muted/20 p-3 sm:grid-cols-12">
+                <div className="sm:col-span-8">
+                  <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Published Practice Problem</label>
+                  <Select
+                    value={selectedPracticeProblemId}
+                    onChange={(event) => setSelectedPracticeProblemId(event.target.value)}
+                    options={[
+                      { label: linkableProblemsQuery.isLoading ? 'Loading published problems...' : 'Select a published problem', value: '' },
+                      ...linkableProblems.map((problem) => ({
+                        label: `${problem.title} · ${problem.difficulty} · ${problem.language}`,
+                        value: problem.id,
+                      })),
+                    ]}
+                  />
+                </div>
+                <div className="sm:col-span-4">
+                  <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Behavior</label>
+                  <Select
+                    value={overrideBehavior === 'INHERIT' ? defaultPracticeBehavior : overrideBehavior}
+                    onChange={(event) => setOverrideBehavior(event.target.value as VideoPracticeBehavior)}
+                    options={[
+                      { label: 'Required checkpoint', value: 'REQUIRED' },
+                      { label: 'Guided / Skippable', value: 'GUIDED' },
+                    ]}
+                  />
+                </div>
+                {selectedPracticeProblemId ? (
+                  <p className="sm:col-span-12 text-[11px] leading-5 text-muted-foreground">
+                    Students will run public samples and submit the current video workspace to the official Practice/Judge hidden tests.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
             {/* Summary preview badge */}
             <div className="rounded-lg border border-border/70 bg-muted/20 p-3 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <ClipboardCheck className="h-4 w-4 text-primary" />
                 <span className="text-xs font-semibold text-foreground">
-                  Code Checkpoint
+                  {milestoneKind === 'PRACTICE_PROBLEM' ? 'Practice Problem' : 'Code Checkpoint'}
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  • {effectivePracticePreview.summary}
+                  • {milestoneKind === 'PRACTICE_PROBLEM'
+                    ? (linkableProblems.find((problem) => problem.id === selectedPracticeProblemId)?.title ?? 'Select a published problem')
+                    : effectivePracticePreview.summary}
                 </span>
               </div>
 
               <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
                 <span className="rounded bg-muted px-2 py-0.5">
-                  {effectivePracticePreview.behavior === 'REQUIRED' ? 'Required' : 'Guided'}
+                  {milestoneKind === 'PRACTICE_PROBLEM'
+                    ? ((overrideBehavior === 'INHERIT' ? defaultPracticeBehavior : overrideBehavior) === 'REQUIRED' ? 'Required' : 'Guided')
+                    : effectivePracticePreview.behavior === 'REQUIRED' ? 'Required' : 'Guided'}
                 </span>
                 <span className="rounded bg-muted px-2 py-0.5">
-                  Verification: {effectivePracticePreview.verificationMode}
+                  Verification: {milestoneKind === 'PRACTICE_PROBLEM' ? 'Practice Judge' : effectivePracticePreview.verificationMode}
                 </span>
               </div>
             </div>
 
             {/* Progressive Disclosure: Override this step ▾ */}
+            {milestoneKind === 'CODE_CHECKPOINT' ? (
             <div className="rounded-lg border border-border/60 bg-card">
               <button
                 type="button"
@@ -921,8 +1084,10 @@ export function CodeAlongStudio({
                 </div>
               )}
             </div>
+            ) : null}
 
             {/* Code Editor & File Tabs */}
+            {milestoneKind === 'CODE_CHECKPOINT' ? (
             <div className="space-y-3 pt-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -1033,6 +1198,31 @@ export function CodeAlongStudio({
                 </Button>
               </div>
             </div>
+            ) : (
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    setIsCreatingSnapshot(false);
+                    setEditingSnapshotId(null);
+                    setMilestoneKind('CODE_CHECKPOINT');
+                    setSelectedPracticeProblemId('');
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  isLoading={saveSnapshotMutation.isPending}
+                  onClick={() => saveSnapshotMutation.mutate()}
+                  disabled={!selectedPracticeProblemId}
+                >
+                  <Save className="h-3.5 w-3.5 mr-1" />
+                  <span>Save Practice Milestone</span>
+                </Button>
+              </div>
+            )}
           </div>
         )}
 
@@ -1116,7 +1306,61 @@ export function CodeAlongStudio({
             );
           })}
 
-          {snapshots.length === 0 && !isCreatingSnapshot && (
+          {practiceOnlyCheckpoints.map((checkpoint) => (
+            <div
+              key={checkpoint.id}
+              className="relative flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-card p-3.5 transition-all hover:border-border hover:shadow-2xs"
+            >
+              <div className="absolute -left-6 top-1/2 flex h-4 w-4 -translate-y-1/2 items-center justify-center rounded-full border-2 border-primary/60 bg-background" />
+
+              <div className="flex items-start gap-3 sm:items-center">
+                <span className="shrink-0 rounded-md bg-muted px-2 py-0.5 font-mono text-xs font-semibold text-foreground">
+                  {formatTime(checkpoint.timestampSeconds)}
+                </span>
+                <div>
+                  <h5 className="text-xs font-semibold text-foreground sm:text-sm">
+                    {checkpoint.title}
+                  </h5>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    <span className="font-medium text-primary">Practice Problem</span>
+                    {' · '}
+                    <span>{checkpoint.practiceProblem?.title}</span>
+                    {' · '}
+                    <span>{checkpoint.required ? 'Required' : 'Guided'}</span>
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground/80">
+                    Uses published Practice/Judge tests; no video test cases stored here.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1">
+                {onSeekToSeconds ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => onSeekToSeconds(checkpoint.timestampSeconds)}
+                    className="h-7 px-2.5 text-xs"
+                  >
+                    <Play className="mr-1 h-3 w-3" />
+                    Jump
+                  </Button>
+                ) : null}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2.5 text-xs text-destructive hover:bg-destructive/10"
+                  isLoading={deleteCheckpoint.isPending && deleteCheckpoint.variables === checkpoint.id}
+                  onClick={() => deleteCheckpoint.mutate(checkpoint.id)}
+                >
+                  <Trash2 className="mr-1 h-3 w-3" />
+                  Delete
+                </Button>
+              </div>
+            </div>
+          ))}
+
+          {snapshots.length === 0 && practiceOnlyCheckpoints.length === 0 && !isCreatingSnapshot && (
             <div className="py-8 text-center text-muted-foreground space-y-1">
               <p className="text-xs font-medium">No timeline milestones captured yet.</p>
               <p className="text-[11px] text-muted-foreground/80">Click &quot;Add Milestone&quot; above to link code snapshots to video timestamps.</p>

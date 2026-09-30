@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   JudgeSubmissionStatus,
+  PracticeProblemStatus,
   Prisma,
   ScoringMode,
   TestCaseResultStatus,
@@ -531,25 +532,40 @@ export class JudgeService {
 
     const checkpoint = workspace.lesson?.videoAsset?.checkpoints[0];
     const config = checkpoint?.codingConfig;
+    const problem = checkpoint?.practiceProblem;
 
-    if (!checkpoint || !config || !workspace.lessonId || !workspace.lesson?.module?.course?.id) {
+    if (!checkpoint || !workspace.lessonId || !workspace.lesson?.module?.course?.id) {
       throw judgeSubmissionNotAllowed('Practice step has no judgeable test configuration');
+    }
+    if (checkpoint.practiceProblemId && (!problem || problem.status !== PracticeProblemStatus.PUBLISHED || problem.archivedAt)) {
+      throw judgeSubmissionNotAllowed('Linked practice problem is not available');
     }
 
     const language = validateLanguage(workspace.language);
+    const entryFile = problem?.entryFile ?? config?.entryFile;
+    const timeLimitMs = problem?.timeLimitMs ?? config?.timeLimitMs;
+    const memoryLimitMb = problem?.memoryLimitMb ?? config?.memoryLimitMb;
+    const passScore = problem?.passScore ?? config?.passScore;
+    const scoringMode = problem?.scoringMode ?? config?.scoringMode;
+    const testCases = problem?.testCases ?? config?.testCases ?? [];
+    const configuredLanguage = problem?.language ?? config?.language;
 
-    if (language !== config.language.toLowerCase()) {
+    if (!configuredLanguage || !entryFile || timeLimitMs === undefined || memoryLimitMb === undefined || passScore === undefined || !scoringMode) {
+      throw judgeSubmissionNotAllowed('Practice step has no judgeable test configuration');
+    }
+
+    if (language !== configuredLanguage.toLowerCase()) {
       throw judgeSubmissionNotAllowed('Workspace language does not match practice step test configuration');
     }
 
     const files = workspace.files.map((file) => ({ path: file.path, content: file.content }));
-    validateWorkspaceFiles(files, config.entryFile, this.env);
+    validateWorkspaceFiles(files, entryFile, this.env);
 
-    if (config.testCases.length === 0 || !config.testCases.some((test) => Number(test.weight) > 0)) {
+    if (testCases.length === 0 || !testCases.some((test) => Number(test.weight) > 0)) {
       throw judgeSubmissionNotAllowed('Practice step has no judgeable test cases');
     }
 
-    validateResourceLimits({ timeLimitMs: config.timeLimitMs, memoryLimitMb: config.memoryLimitMb }, this.env);
+    validateResourceLimits({ timeLimitMs, memoryLimitMb }, this.env);
 
     const active = await this.repository.countActiveSubmissions(userId);
 
@@ -561,10 +577,10 @@ export class JudgeService {
       userId,
       workspaceId: workspace.id,
       checkpointId: checkpoint.id,
-      codingCheckpointConfigId: config.id,
-      practiceProblemId: null,
+      codingCheckpointConfigId: problem ? null : config?.id ?? null,
+      practiceProblemId: problem?.id ?? null,
       language,
-      entryFile: config.entryFile,
+      entryFile,
       filesSnapshotJson: { files } as Prisma.InputJsonValue,
       status: JudgeSubmissionStatus.QUEUED,
       jobId: randomUUID(),
@@ -591,15 +607,15 @@ export class JudgeService {
       payload: {
         submissionId: submission.id,
         checkpointId: checkpoint.id,
-        practiceProblemId: null,
+        practiceProblemId: problem?.id ?? null,
         language,
-        entryFile: config.entryFile,
-        timeLimitMs: config.timeLimitMs,
-        memoryLimitMb: config.memoryLimitMb,
-        passScore: Number(config.passScore),
-        scoringMode: config.scoringMode,
+        entryFile,
+        timeLimitMs,
+        memoryLimitMb,
+        passScore: Number(passScore),
+        scoringMode,
         files,
-        testCases: config.testCases.map((test) => ({
+        testCases: testCases.map((test) => ({
           id: test.id,
           name: test.name,
           visibility: test.visibility,

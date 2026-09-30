@@ -47,6 +47,93 @@ function safeErrorMessage(error: unknown) {
   return error instanceof Error ? error.message.slice(0, 500) : 'Unknown worker error';
 }
 
+interface SafeExecutionFailure {
+  readonly errorCode: string;
+  readonly stderr: string;
+  readonly retryable: boolean;
+}
+
+const SAFE_GENERATOR_ERROR_CODES = new Set([
+  'GENERATOR_EXECUTION_FAILED',
+  'GENERATOR_CONTRACT_INVALID',
+  'GENERATOR_OUTPUT_LIMIT_EXCEEDED',
+  'REFERENCE_SOLUTION_FAILED',
+  'EXECUTION_WORKER_FAILED',
+]);
+
+function isPracticeOracleMode(mode: CodeExecutionRequestedPayload['executionMode'] | undefined) {
+  return mode === 'PRACTICE_ORACLE_BATCH' || mode === 'PRACTICE_GENERATOR_ORACLE';
+}
+
+function parseStructuredFailure(stderr: string): SafeExecutionFailure | null {
+  const marker = 'CODESYNC_ERROR_JSON:';
+  const markerIndex = stderr.indexOf(marker);
+
+  if (markerIndex === -1) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(stderr.slice(markerIndex + marker.length)) as {
+      readonly code?: unknown;
+      readonly message?: unknown;
+    };
+    const errorCode = typeof parsed.code === 'string' && SAFE_GENERATOR_ERROR_CODES.has(parsed.code)
+      ? parsed.code
+      : 'EXECUTION_WORKER_FAILED';
+    const message = typeof parsed.message === 'string' && parsed.message.trim()
+      ? parsed.message.trim().slice(0, 500)
+      : 'Code execution failed.';
+
+    return {
+      errorCode,
+      stderr: message,
+      retryable: errorCode === 'EXECUTION_WORKER_FAILED',
+    };
+  } catch {
+    return {
+      errorCode: 'EXECUTION_RESULT_INVALID',
+      stderr: 'Worker result could not be parsed.',
+      retryable: false,
+    };
+  }
+}
+
+export function mapSandboxFailure(input: {
+  readonly executionMode?: CodeExecutionRequestedPayload['executionMode'];
+  readonly stderr: string;
+  readonly outputTruncated: boolean;
+}): SafeExecutionFailure {
+  if (input.executionMode === 'PRACTICE_ORACLE_BATCH') {
+    return {
+      errorCode: 'REFERENCE_SOLUTION_FAILED',
+      stderr: input.stderr.trim() || 'Reference Solution failed while generating expected output.',
+      retryable: false,
+    };
+  }
+
+  if (input.executionMode === 'PRACTICE_GENERATOR_ORACLE') {
+    if (input.outputTruncated) {
+      return {
+        errorCode: 'GENERATOR_OUTPUT_LIMIT_EXCEEDED',
+        stderr: 'Generated payload exceeds the configured output limit.',
+        retryable: false,
+      };
+    }
+
+    const structured = parseStructuredFailure(input.stderr);
+    if (structured) {
+      return structured;
+    }
+  }
+
+  return {
+    errorCode: 'USER_RUNTIME_ERROR',
+    stderr: input.stderr,
+    retryable: false,
+  };
+}
+
 export async function setupCodeExecutionWorkerTopology(channel: Channel, maxAttempts: number) {
   await channel.assertExchange(CODE_EXCHANGE, 'topic', { durable: true });
   await channel.assertQueue(CODE_EXECUTION_DLQ, { durable: true });
@@ -91,7 +178,10 @@ export async function processCodeExecutionMessage(input: {
   try {
     const runtime = getRuntime(envelope.payload.language);
 
-    if (envelope.payload.executionMode === 'FUNCTION' && envelope.payload.stdin === undefined) {
+    if (
+      (envelope.payload.executionMode === 'FUNCTION' || envelope.payload.executionMode === 'PRACTICE_ORACLE_BATCH') &&
+      envelope.payload.stdin === undefined
+    ) {
       publish<CodeExecutionFailedPayload>({
         channel: input.channel,
         routingKey: CODE_EXECUTION_ROUTING_KEYS.failed,
@@ -100,14 +190,14 @@ export async function processCodeExecutionMessage(input: {
           executionId: envelope.payload.executionId,
           exitCode: null,
           stdout: '',
-          stderr: 'Practice run input was not provided by the API.',
+          stderr: 'Practice execution input was not provided by the API.',
           durationMs: 0,
           memoryBytes: null,
           errorCode: 'EXECUTION_INPUT_MISSING',
           retryable: false,
         },
       });
-      logError('practice function execution missing stdin', {
+      logError('practice execution missing stdin', {
         executionId: envelope.payload.executionId,
         jobId: envelope.jobId,
       });
@@ -135,6 +225,7 @@ export async function processCodeExecutionMessage(input: {
     const stderr = result.outputTruncated ? `${result.stderr}\n[CodeSync output truncated]` : result.stderr;
 
     if (result.status === 'timed_out') {
+      const oracleTimeout = isPracticeOracleMode(envelope.payload.executionMode);
       publish<CodeExecutionTimedOutPayload>({
         channel: input.channel,
         routingKey: CODE_EXECUTION_ROUTING_KEYS.timedOut,
@@ -142,16 +233,22 @@ export async function processCodeExecutionMessage(input: {
         payload: {
           executionId: envelope.payload.executionId,
           stdout: result.stdout,
-          stderr,
+          stderr: oracleTimeout ? 'Reference Solution timed out while generating expected output.' : stderr,
           durationMs: result.durationMs,
-          errorCode: 'EXECUTION_TIMED_OUT',
+          errorCode: oracleTimeout ? 'REFERENCE_SOLUTION_TIMEOUT' : 'EXECUTION_TIMED_OUT',
         },
       });
-      log('execution timed out', { executionId: envelope.payload.executionId, jobId: envelope.jobId, durationMs: result.durationMs });
+      log('execution timed out', {
+        executionId: envelope.payload.executionId,
+        jobId: envelope.jobId,
+        durationMs: result.durationMs,
+        executionMode: envelope.payload.executionMode ?? 'DIRECT',
+        safeErrorCode: oracleTimeout ? 'REFERENCE_SOLUTION_TIMEOUT' : 'EXECUTION_TIMED_OUT',
+      });
       return;
     }
 
-    if (result.exitCode === 0) {
+    if (result.exitCode === 0 && !(envelope.payload.executionMode === 'PRACTICE_GENERATOR_ORACLE' && result.outputTruncated)) {
       publish<CodeExecutionCompletedPayload>({
         channel: input.channel,
         routingKey: CODE_EXECUTION_ROUTING_KEYS.completed,
@@ -166,6 +263,11 @@ export async function processCodeExecutionMessage(input: {
         },
       });
     } else {
+      const failure = mapSandboxFailure({
+        executionMode: envelope.payload.executionMode,
+        stderr,
+        outputTruncated: result.outputTruncated,
+      });
       publish<CodeExecutionFailedPayload>({
         channel: input.channel,
         routingKey: CODE_EXECUTION_ROUTING_KEYS.failed,
@@ -174,11 +276,11 @@ export async function processCodeExecutionMessage(input: {
           executionId: envelope.payload.executionId,
           exitCode: result.exitCode,
           stdout: result.stdout,
-          stderr,
+          stderr: failure.stderr,
           durationMs: result.durationMs,
           memoryBytes: null,
-          errorCode: 'USER_RUNTIME_ERROR',
-          retryable: false,
+          errorCode: failure.errorCode,
+          retryable: failure.retryable,
         },
       });
     }
@@ -188,6 +290,7 @@ export async function processCodeExecutionMessage(input: {
       jobId: envelope.jobId,
       exitCode: result.exitCode,
       durationMs: result.durationMs,
+      executionMode: envelope.payload.executionMode ?? 'DIRECT',
     });
   } catch (error) {
     const errorMessage = safeErrorMessage(error);

@@ -1,10 +1,15 @@
 import type { Request, Response } from 'express';
 import {
   createPracticeProblemSchema,
+  commitPracticeGeneratedTestsSchema,
   instructorPracticeListQuerySchema,
   importPracticeTestCasesSchema,
   practiceProblemIdParamsSchema,
   practiceProblemSlugParamsSchema,
+  practiceExecutionParamsSchema,
+  previewPracticeGeneratorSchema,
+  previewPracticeInputImportSchema,
+  practiceHiddenTestCaseSourceParamsSchema,
   practiceSubmissionListQuerySchema,
   practiceTestCaseInputSchema,
   practiceTestCaseParamsSchema,
@@ -63,8 +68,23 @@ export class PracticeController {
 
   deleteTestCase = async (request: Request, response: Response) => {
     const params = practiceTestCaseParamsSchema.parse(request.params);
-    await this.service.deleteTestCase(request.auth!.userId, params.testCaseId);
+    await this.service.deleteTestCase(request.auth!.userId, params.testCaseId, request.auth!.roles);
     response.status(204).send();
+  };
+
+  deleteHiddenTestCases = async (request: Request, response: Response) => {
+    const params = practiceProblemIdParamsSchema.parse(request.params);
+    response.status(200).json(await this.service.deleteHiddenTestCases(request.auth!.userId, params.problemId, request.auth!.roles));
+  };
+
+  deleteHiddenTestCasesBySource = async (request: Request, response: Response) => {
+    const params = practiceHiddenTestCaseSourceParamsSchema.parse(request.params);
+    response.status(200).json(await this.service.deleteHiddenTestCasesBySource(
+      request.auth!.userId,
+      params.problemId,
+      params.source,
+      request.auth!.roles,
+    ));
   };
 
   deleteProblem = async (request: Request, response: Response) => {
@@ -80,6 +100,40 @@ export class PracticeController {
       params.problemId,
       importPracticeTestCasesSchema.parse(request.body),
     ));
+  };
+
+  previewInputImport = async (request: Request, response: Response) => {
+    const params = practiceProblemIdParamsSchema.parse(request.params);
+    response.status(202).json(await this.service.previewInputImport(
+      request.auth!.userId,
+      params.problemId,
+      previewPracticeInputImportSchema.parse(request.body),
+      request.requestId,
+    ));
+  };
+
+  previewGenerator = async (request: Request, response: Response) => {
+    const params = practiceProblemIdParamsSchema.parse(request.params);
+    response.status(202).json(await this.service.previewGenerator(
+      request.auth!.userId,
+      params.problemId,
+      previewPracticeGeneratorSchema.parse(request.body),
+      request.requestId,
+    ));
+  };
+
+  commitGeneratedTests = async (request: Request, response: Response) => {
+    const params = practiceProblemIdParamsSchema.parse(request.params);
+    response.status(201).json(await this.service.commitGeneratedTests(
+      request.auth!.userId,
+      params.problemId,
+      commitPracticeGeneratedTestsSchema.parse(request.body),
+    ));
+  };
+
+  getAuthoringExecution = async (request: Request, response: Response) => {
+    const params = practiceExecutionParamsSchema.parse(request.params);
+    response.status(200).json(await this.service.getAuthoringExecution(request.auth!.userId, params.executionId));
   };
 
   reorderTestCases = async (request: Request, response: Response) => {

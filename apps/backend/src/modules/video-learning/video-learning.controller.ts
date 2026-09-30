@@ -106,6 +106,11 @@ export class VideoLearningController {
     response.status(200).json({ checkpoints: await this.videoLearning.listCheckpoints(auth.userId, params.videoAssetId) });
   };
 
+  listLinkablePracticeProblems = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    response.status(200).json({ problems: await this.videoLearning.listLinkablePracticeProblems(auth.userId) });
+  };
+
   updateCheckpoint = async (request: Request, response: Response) => {
     const auth = requireRequestAuth(request);
     const params = checkpointIdParamSchema.parse(request.params);

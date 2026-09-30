@@ -7,7 +7,7 @@ import {
   type CodeExecutionRequestedPayload,
 } from '@codesync/shared';
 import { loadWorkerEnv } from './config';
-import { processCodeExecutionMessage } from './consumer';
+import { mapSandboxFailure, processCodeExecutionMessage } from './consumer';
 
 const env = loadWorkerEnv({
   NODE_ENV: 'test',
@@ -37,6 +37,87 @@ function makeMessage(payload: AsyncMessage<CodeExecutionRequestedPayload>): Cons
 }
 
 describe('code execution consumer', () => {
+  it('maps structured practice generator errors to safe error codes', () => {
+    expect(mapSandboxFailure({
+      executionMode: 'PRACTICE_GENERATOR_ORACLE',
+      stderr: 'CODESYNC_ERROR_JSON:{"code":"GENERATOR_CONTRACT_INVALID","message":"generateTests() must return an array."}',
+      outputTruncated: false,
+    })).toEqual({
+      errorCode: 'GENERATOR_CONTRACT_INVALID',
+      stderr: 'generateTests() must return an array.',
+      retryable: false,
+    });
+
+    expect(mapSandboxFailure({
+      executionMode: 'PRACTICE_GENERATOR_ORACLE',
+      stderr: 'CODESYNC_ERROR_JSON:{"code":"REFERENCE_SOLUTION_FAILED","message":"Generator succeeded, but the Reference Solution failed on generated test #2."}',
+      outputTruncated: false,
+    })).toEqual({
+      errorCode: 'REFERENCE_SOLUTION_FAILED',
+      stderr: 'Generator succeeded, but the Reference Solution failed on generated test #2.',
+      retryable: false,
+    });
+  });
+
+  it('maps truncated practice generator output to output limit exceeded', () => {
+    expect(mapSandboxFailure({
+      executionMode: 'PRACTICE_GENERATOR_ORACLE',
+      stderr: '',
+      outputTruncated: true,
+    })).toEqual({
+      errorCode: 'GENERATOR_OUTPUT_LIMIT_EXCEEDED',
+      stderr: 'Generated payload exceeds the configured output limit.',
+      retryable: false,
+    });
+  });
+
+  it('maps practice oracle batch runtime failures to reference-solution failures', () => {
+    expect(mapSandboxFailure({
+      executionMode: 'PRACTICE_ORACLE_BATCH',
+      stderr: 'Cannot read properties of undefined',
+      outputTruncated: false,
+    })).toEqual({
+      errorCode: 'REFERENCE_SOLUTION_FAILED',
+      stderr: 'Cannot read properties of undefined',
+      retryable: false,
+    });
+  });
+
+  it('fails oracle batch executions without stdin before calling the sandbox', async () => {
+    const publish = vi.fn((_exchange: string, _routingKey: string, _content: Buffer) => {
+      return true;
+    });
+    const channel = { publish } as unknown as Channel;
+    const message = makeMessage({
+      jobId: 'job-oracle-missing-input',
+      idempotencyKey: 'idem-oracle-missing-input',
+      correlationId: 'corr-oracle-missing-input',
+      requestedByUserId: 'user-1',
+      createdAt: new Date().toISOString(),
+      payload: {
+        executionId: 'execution-oracle-missing-input',
+        workspaceId: 'workspace-1',
+        language: 'javascript',
+        files: [{ path: 'index.js', content: 'module.exports = { solution: () => [] };' }],
+        entryFile: 'index.js',
+        executionMode: 'PRACTICE_ORACLE_BATCH',
+      },
+    });
+
+    await expect(processCodeExecutionMessage({ message, channel, env })).resolves.toBeUndefined();
+
+    const publishedBody = publish.mock.calls[0]?.[2];
+    if (!publishedBody) {
+      throw new Error('Expected worker to publish a failed result');
+    }
+    const failedPayload = JSON.parse(publishedBody.toString('utf8')) as AsyncMessage<Record<string, unknown>>;
+    expect(failedPayload.payload).toMatchObject({
+      executionId: 'execution-oracle-missing-input',
+      errorCode: 'EXECUTION_INPUT_MISSING',
+      retryable: false,
+    });
+  });
+
   it('publishes a failed result instead of throwing when a job cannot be processed', async () => {
     const publish = vi.fn((_exchange: string, _routingKey: string, _content: Buffer) => {
       return true;

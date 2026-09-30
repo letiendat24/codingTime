@@ -42,6 +42,7 @@ export interface StudentWorkspaceProps {
   readonly onRegisterSave?: ((save: (() => Promise<void>) | null) => void) | undefined;
   readonly capabilities?: WorkspaceCapabilities | undefined;
   readonly workspaceType?: 'SINGLE_FILE' | 'MULTI_FILE' | undefined;
+  readonly runExecutionRequest?: (() => Promise<{ readonly id: string; readonly status: string }>) | undefined;
 }
 
 export function StudentWorkspace({
@@ -55,6 +56,7 @@ export function StudentWorkspace({
   onRegisterSave,
   capabilities = DEFAULT_WORKSPACE_CAPABILITIES,
   workspaceType = 'SINGLE_FILE',
+  runExecutionRequest,
 }: StudentWorkspaceProps) {
   const queryClient = useQueryClient();
   const { t } = useI18n();
@@ -140,7 +142,7 @@ export function StudentWorkspace({
     mutationFn: async () => {
       await saveWorkspace.mutateAsync(draftFiles);
       setResultTab('output');
-      return requestJson<{ readonly id: string; readonly status: string }>(
+      return runExecutionRequest ? runExecutionRequest() : requestJson<{ readonly id: string; readonly status: string }>(
         `/workspaces/${workspaceId}/executions`,
         { method: 'POST' },
       );

@@ -8,6 +8,7 @@ import {
   lessonIdParamSchema,
   revisionIdParamSchema,
   runWorkspaceSchema,
+  runVideoPracticeStepSchema,
   saveWorkspaceFilesSchema,
   workspaceIdParamSchema,
 } from './code-execution.schemas';
@@ -82,6 +83,13 @@ export class CodeExecutionController {
     const params = workspaceIdParamSchema.parse(request.params);
     const body = runWorkspaceSchema.parse(request.body ?? {});
     response.status(202).json(await this.codeExecution.runWorkspace(auth.userId, params.workspaceId, request.requestId, body));
+  };
+
+  runVideoPracticeStep = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    const params = checkpointIdParamSchema.parse(request.params);
+    const body = runVideoPracticeStepSchema.parse(request.body ?? {});
+    response.status(202).json(await this.codeExecution.runVideoPracticeStep(auth.userId, params.checkpointId, request.requestId, body));
   };
 
   getExecution = async (request: Request, response: Response) => {

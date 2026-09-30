@@ -3,6 +3,7 @@ import {
   JudgeSubmissionStatus,
   PracticeProblemStatus,
   Prisma,
+  RoleName,
   ScoringMode,
   TestCaseVisibility,
   type PracticeProblemTestCase,
@@ -12,8 +13,12 @@ import {
 } from '@prisma/client';
 import type { Env } from '../../config';
 import { paginationMeta } from '../../shared/pagination';
+import type { AppLogger } from '../../shared/logger';
+import type { CodeExecutionService } from '../code-execution/code-execution.service';
 import type { JudgeService } from '../judge/judge.service';
 import {
+  practiceGenerationFailed,
+  practiceGenerationInvalidResult,
   practiceProblemInvalid,
   practiceProblemNotFound,
   practiceProblemNotOwned,
@@ -26,6 +31,10 @@ import type {
   CreatePracticeProblemInput,
   ImportPracticeTestCasesInput,
   InstructorPracticeListQuery,
+  CommitPracticeGeneratedTestsInput,
+  PreviewPracticeGeneratorInput,
+  PreviewPracticeInputImportInput,
+  PracticeHiddenTestCaseSource,
   PracticeSubmissionListQuery,
   PracticeTestCaseInput,
   PracticeTestCaseUpdateInput,
@@ -35,6 +44,8 @@ import type {
 
 const DEFAULT_LANGUAGE = 'javascript';
 const SUPPORTED_LANGUAGES = new Set([DEFAULT_LANGUAGE]);
+const PRACTICE_TEST_GENERATION_VERSION = 'practice-test-generation-v1';
+const PRACTICE_GENERATOR_FILE = '.codesync/generator.cjs';
 
 function slugify(value: string) {
   return value
@@ -129,6 +140,80 @@ function validateTestCasePayload(input: { readonly input: string; readonly expec
   }
 }
 
+function validateGeneratedInputs(
+  tests: readonly { readonly input: unknown; readonly name?: string | undefined; readonly weight?: number | undefined }[],
+  env: Env,
+) {
+  const seen = new Set<string>();
+  for (const [index, test] of tests.entries()) {
+    const serialized = serializeJsonInput(test.input);
+    if (Buffer.byteLength(serialized, 'utf8') > env.JUDGE_MAX_TEST_INPUT_BYTES) {
+      throw practiceProblemInvalid(`Test #${index + 1}: Input exceeds ${env.JUDGE_MAX_TEST_INPUT_BYTES} bytes`);
+    }
+    const fingerprint = canonicalJson(test.input);
+    if (seen.has(fingerprint)) {
+      throw practiceProblemInvalid(`Test #${index + 1}: Duplicate input`);
+    }
+    seen.add(fingerprint);
+    if (test.weight !== undefined && test.weight <= 0) {
+      throw practiceProblemInvalid(`Test #${index + 1}: Weight must be positive`);
+    }
+  }
+}
+
+function parseGeneratedExecutionOutput(stdout: string) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout) as unknown;
+  } catch {
+    throw practiceGenerationInvalidResult('Generation execution returned unreadable output');
+  }
+  const tests = (parsed as { readonly tests?: unknown } | null)?.tests;
+  if (!Array.isArray(tests)) {
+    throw practiceGenerationInvalidResult('Generation execution did not return a tests array');
+  }
+
+  return tests.map((item, index) => {
+    const candidate = item as {
+      readonly name?: unknown;
+      readonly input?: unknown;
+      readonly weight?: unknown;
+      readonly expectedOutput?: unknown;
+    };
+    if (typeof candidate.expectedOutput !== 'string') {
+      throw practiceProblemInvalid(`Generated test #${index + 1}: Expected output is missing`);
+    }
+    return {
+      name: typeof candidate.name === 'string' && candidate.name.trim() ? candidate.name.trim() : `Generated Test ${index + 1}`,
+      input: serializeJsonInput(candidate.input),
+      expectedOutput: candidate.expectedOutput,
+      weight: typeof candidate.weight === 'number' && candidate.weight > 0 ? candidate.weight : 1,
+    };
+  });
+}
+
+function generationFailureMessage(errorCode: string | null | undefined, stderr: string) {
+  const safeStderr = stderr.trim();
+  switch (errorCode) {
+    case 'GENERATOR_EXECUTION_FAILED':
+      return safeStderr || 'Generator script failed while running.';
+    case 'GENERATOR_CONTRACT_INVALID':
+      return safeStderr || 'generateTests() must return an array.';
+    case 'GENERATOR_OUTPUT_LIMIT_EXCEEDED':
+      return safeStderr || 'Generated payload exceeds the configured output limit.';
+    case 'REFERENCE_SOLUTION_FAILED':
+      return safeStderr || 'Generator succeeded, but the Reference Solution failed on a generated test.';
+    case 'REFERENCE_SOLUTION_TIMEOUT':
+      return safeStderr || 'Reference Solution timed out while generating expected output.';
+    case 'EXECUTION_WORKER_FAILED':
+      return 'Code execution worker failed before producing a sandbox result.';
+    case 'EXECUTION_RESULT_INVALID':
+      return 'Persisted execution result is malformed or unreadable.';
+    default:
+      return safeStderr || 'Generation execution failed.';
+  }
+}
+
 function normalizeForFingerprint(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map((item) => normalizeForFingerprint(item));
@@ -167,12 +252,43 @@ function practiceValidationFingerprint(problem: Prisma.PracticeProblemGetPayload
       visibility: test.visibility,
       input: test.input,
       expectedOutput: test.expectedOutput,
+      source: test.source,
+      expectedOutputSource: test.expectedOutputSource,
+      referenceFingerprint: test.referenceFingerprint,
+      generationVersion: test.generationVersion,
       weight: Number(test.weight),
       position: test.position,
     })),
   };
 
   return createHash('sha256').update(JSON.stringify(normalizeForFingerprint(payload))).digest('hex');
+}
+
+function referenceSolutionFingerprint(input: {
+  readonly language: string;
+  readonly entryFile: string;
+  readonly executionContract: string;
+  readonly referenceFiles: readonly { readonly path: string; readonly content: string }[];
+}) {
+  return createHash('sha256').update(JSON.stringify(normalizeForFingerprint({
+    version: PRACTICE_TEST_GENERATION_VERSION,
+    language: input.language,
+    entryFile: input.entryFile,
+    executionContract: input.executionContract,
+    referenceFiles: input.referenceFiles,
+  }))).digest('hex');
+}
+
+function serializeJsonInput(value: unknown) {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) {
+    throw practiceProblemInvalid('Test input must be JSON-serializable');
+  }
+  return serialized;
+}
+
+function canonicalJson(value: unknown) {
+  return JSON.stringify(normalizeForFingerprint(value));
 }
 
 function validateStatement(problem: {
@@ -204,6 +320,10 @@ function mapTestCase(test: PracticeProblemTestCase) {
     visibility: test.visibility,
     input: test.input,
     expectedOutput: test.expectedOutput,
+    source: test.source,
+    expectedOutputSource: test.expectedOutputSource,
+    referenceFingerprint: test.referenceFingerprint,
+    generationVersion: test.generationVersion,
     weight: Number(test.weight),
     position: test.position,
   };
@@ -224,6 +344,15 @@ function mapWorkspace(workspace: Workspace & { files: readonly WorkspaceFile[] }
 
 function mapProblem(problem: Prisma.PracticeProblemGetPayload<{ include: typeof practiceProblemInclude }>) {
   const publicTests = problem.testCases.filter((test) => test.visibility === TestCaseVisibility.PUBLIC);
+  const referenceFiles = filesFromJson(problem.referenceFilesJson);
+  const currentReferenceFingerprint = referenceFiles.some((file) => file.path === problem.entryFile)
+    ? referenceSolutionFingerprint({
+        language: problem.language,
+        entryFile: problem.entryFile,
+        executionContract: problem.executionContract,
+        referenceFiles,
+      })
+    : null;
   return {
     id: problem.id,
     title: problem.title,
@@ -239,7 +368,8 @@ function mapProblem(problem: Prisma.PracticeProblemGetPayload<{ include: typeof 
     language: problem.language,
     entryFile: problem.entryFile,
     starterFiles: filesFromJson(problem.starterFilesJson),
-    referenceFiles: filesFromJson(problem.referenceFilesJson),
+    referenceFiles,
+    currentReferenceFingerprint,
     executionContract: problem.executionContract,
     comparisonPolicy: problem.comparisonPolicy,
     validatedAt: problem.validatedAt?.toISOString() ?? null,
@@ -282,8 +412,32 @@ export class PracticeService {
     private readonly prisma: PrismaClient,
     private readonly repository: PracticeRepository,
     private readonly judgeService: JudgeService,
+    private readonly codeExecution: CodeExecutionService,
     private readonly env: Env,
+    private readonly logger: AppLogger,
   ) {}
+
+  private canManageAllPracticeProblems(roles: readonly RoleName[]) {
+    return roles.includes(RoleName.ADMIN);
+  }
+
+  private async compactTestCasePositions(repository: PracticeRepository, problemId: string) {
+    const remaining = await repository.listTestCases(problemId);
+    for (const [index, test] of remaining.entries()) {
+      await repository.setTestCasePosition(test.id, -(index + 1));
+    }
+    for (const [index, test] of remaining.entries()) {
+      await repository.setTestCasePosition(test.id, index + 1);
+    }
+  }
+
+  private async invalidateProblemValidation(repository: PracticeRepository, problemId: string) {
+    await repository.updateProblem(problemId, {
+      validationFingerprint: null,
+      validatedAt: null,
+      validationSummaryJson: Prisma.DbNull,
+    });
+  }
 
   async createProblem(instructorId: string, input: CreatePracticeProblemInput) {
     const slug = slugify(input.slug ?? input.title);
@@ -493,6 +647,35 @@ export class PracticeService {
       details.push('At least one public example test is required');
     }
 
+    const currentReferenceFingerprint = referenceFiles.some((file) => file.path === problem.entryFile)
+      ? referenceSolutionFingerprint({
+          language: problem.language,
+          entryFile: problem.entryFile,
+          executionContract: problem.executionContract,
+          referenceFiles,
+        })
+      : null;
+    const staleGenerated = problem.testCases.filter((test) =>
+      test.expectedOutputSource === 'REFERENCE_SOLUTION' &&
+      (!currentReferenceFingerprint || test.referenceFingerprint !== currentReferenceFingerprint));
+    if (staleGenerated.length > 0) {
+      details.push('Expected outputs are stale. Regenerate expected outputs from the current reference solution.');
+    }
+
+    const seenInputs = new Set<string>();
+    for (const [index, test] of problem.testCases.entries()) {
+      try {
+        const parsed = JSON.parse(test.input) as unknown;
+        const fingerprint = canonicalJson(parsed);
+        if (seenInputs.has(fingerprint)) {
+          details.push(`Duplicate test input at position ${index + 1}`);
+        }
+        seenInputs.add(fingerprint);
+      } catch {
+        details.push(`Test input at position ${index + 1} must be valid JSON`);
+      }
+    }
+
     return { valid: details.length === 0, details };
   }
 
@@ -522,6 +705,8 @@ export class PracticeService {
       visibility: input.visibility,
       input: input.input,
       expectedOutput: input.expectedOutput,
+      source: 'MANUAL',
+      expectedOutputSource: 'MANUAL',
       weight: new Prisma.Decimal(input.weight),
       position: input.position ?? problem.testCases.length + 1,
     });
@@ -559,6 +744,8 @@ export class PracticeService {
           visibility: test.visibility,
           input: test.input,
           expectedOutput: test.expectedOutput,
+          source: 'MANUAL',
+          expectedOutputSource: 'MANUAL',
           weight: new Prisma.Decimal(test.weight),
           position: offset + index + 1,
         });
@@ -580,6 +767,214 @@ export class PracticeService {
     };
   }
 
+  private getReferenceContext(problem: Prisma.PracticeProblemGetPayload<{ include: typeof practiceProblemInclude }>) {
+    const referenceFiles = filesFromJson(problem.referenceFilesJson);
+    if (!referenceFiles.some((file) => file.path === problem.entryFile)) {
+      throw practiceProblemInvalid('Reference solution must include the entry file before generating expected outputs');
+    }
+    validateFiles(referenceFiles, problem.entryFile, this.env);
+    return {
+      referenceFiles,
+      referenceFingerprint: referenceSolutionFingerprint({
+        language: problem.language,
+        entryFile: problem.entryFile,
+        executionContract: problem.executionContract,
+        referenceFiles,
+      }),
+    };
+  }
+
+  async previewInputImport(
+    instructorId: string,
+    problemId: string,
+    input: PreviewPracticeInputImportInput,
+    correlationId: string,
+  ) {
+    const problem = await this.repository.findInstructorProblem(instructorId, problemId);
+    if (!problem) {
+      throw practiceProblemNotOwned();
+    }
+    if (problem.status !== PracticeProblemStatus.DRAFT) {
+      throw practiceProblemInvalid('Only draft practice problems can be edited');
+    }
+    const tests = input.tests.map((test, index) => {
+      if (!Object.prototype.hasOwnProperty.call(test, 'input')) {
+        throw practiceProblemInvalid(`Test #${index + 1}: Input is required`);
+      }
+      return {
+        input: test.input,
+        ...(test.name === undefined ? {} : { name: test.name }),
+        weight: test.weight,
+      };
+    });
+    validateGeneratedInputs(tests, this.env);
+    const { referenceFiles, referenceFingerprint } = this.getReferenceContext(problem);
+    const queued = await this.codeExecution.runPracticeAuthoringSnapshot({
+      userId: instructorId,
+      practiceProblemId: problem.id,
+      language: problem.language,
+      entryFile: problem.entryFile,
+      files: referenceFiles,
+      executionMode: 'PRACTICE_ORACLE_BATCH',
+      stdin: JSON.stringify({ tests }),
+      correlationId,
+    });
+    this.logger.info({
+      executionId: queued.id,
+      problemId: problem.id,
+      executionMode: 'PRACTICE_ORACLE_BATCH',
+      provider: 'code-execution-worker',
+      currentExecutionStatus: queued.status,
+      generatorStageStatus: 'not_applicable',
+      oracleStageStatus: 'queued',
+      correlationId,
+    }, 'practice input import preview queued');
+
+    return {
+      executionId: queued.id,
+      status: queued.status,
+      visibility: input.visibility,
+      source: 'IMPORT',
+      referenceFingerprint,
+      generationVersion: PRACTICE_TEST_GENERATION_VERSION,
+    };
+  }
+
+  async previewGenerator(
+    instructorId: string,
+    problemId: string,
+    input: PreviewPracticeGeneratorInput,
+    correlationId: string,
+  ) {
+    const problem = await this.repository.findInstructorProblem(instructorId, problemId);
+    if (!problem) {
+      throw practiceProblemNotOwned();
+    }
+    if (problem.status !== PracticeProblemStatus.DRAFT) {
+      throw practiceProblemInvalid('Only draft practice problems can be edited');
+    }
+    const { referenceFiles, referenceFingerprint } = this.getReferenceContext(problem);
+    const files = [
+      ...referenceFiles,
+      { path: PRACTICE_GENERATOR_FILE, content: input.generatorSource },
+    ];
+    validateFiles(files, problem.entryFile, this.env);
+    const queued = await this.codeExecution.runPracticeAuthoringSnapshot({
+      userId: instructorId,
+      practiceProblemId: problem.id,
+      language: problem.language,
+      entryFile: problem.entryFile,
+      files,
+      executionMode: 'PRACTICE_GENERATOR_ORACLE',
+      correlationId,
+    });
+    this.logger.info({
+      executionId: queued.id,
+      problemId: problem.id,
+      executionMode: 'PRACTICE_GENERATOR_ORACLE',
+      provider: 'code-execution-worker',
+      currentExecutionStatus: queued.status,
+      generatorStageStatus: 'queued',
+      oracleStageStatus: 'pending',
+      correlationId,
+    }, 'practice generator preview queued');
+
+    return {
+      executionId: queued.id,
+      status: queued.status,
+      visibility: input.visibility,
+      source: 'GENERATOR',
+      referenceFingerprint,
+      generationVersion: PRACTICE_TEST_GENERATION_VERSION,
+    };
+  }
+
+  async commitGeneratedTests(instructorId: string, problemId: string, input: CommitPracticeGeneratedTestsInput) {
+    const problem = await this.repository.findInstructorProblem(instructorId, problemId);
+    if (!problem) {
+      throw practiceProblemNotOwned();
+    }
+    if (problem.status !== PracticeProblemStatus.DRAFT) {
+      throw practiceProblemInvalid('Only draft practice problems can be edited');
+    }
+
+    const execution = await this.codeExecution.getExecution(instructorId, input.executionId);
+    if (execution.status !== 'SUCCEEDED' || !execution.result) {
+      if (!execution.result) {
+        throw practiceProblemInvalid('Generation execution must complete successfully before commit');
+      }
+      const errorCode = execution.result.errorCode ?? 'EXECUTION_WORKER_FAILED';
+      const message = generationFailureMessage(errorCode, execution.result.stderr);
+      this.logger.warn({
+        executionId: input.executionId,
+        problemId,
+        executionMode: input.source === 'GENERATOR' ? 'PRACTICE_GENERATOR_ORACLE' : 'PRACTICE_ORACLE_BATCH',
+        currentExecutionStatus: execution.status,
+        provider: 'code-execution-worker',
+        generatorStageStatus: input.source === 'GENERATOR' ? 'failed_or_incomplete' : 'not_applicable',
+        oracleStageStatus: 'failed_or_incomplete',
+        safeErrorCode: errorCode,
+        safeErrorMessage: message,
+      }, 'practice generated tests commit blocked');
+      throw practiceGenerationFailed(errorCode, message);
+    }
+    const { referenceFingerprint } = this.getReferenceContext(problem);
+    const generated = parseGeneratedExecutionOutput(execution.result.stdout);
+    validateGeneratedInputs(generated.map((test) => ({ input: JSON.parse(test.input), weight: test.weight })), this.env);
+    const nextCount = input.mode === 'REPLACE_HIDDEN'
+      ? problem.testCases.filter((test) => test.visibility !== TestCaseVisibility.HIDDEN).length + generated.length
+      : problem.testCases.length + generated.length;
+    if (nextCount > this.env.JUDGE_MAX_TEST_CASES) {
+      throw practiceProblemInvalid(`A practice problem can contain at most ${this.env.JUDGE_MAX_TEST_CASES} test cases`);
+    }
+
+    const testCases = await this.prisma.$transaction(async (transaction) => {
+      const repository = new PracticeRepository(transaction);
+      if (input.mode === 'REPLACE_HIDDEN') {
+        await repository.deleteHiddenTestCases(problemId);
+      }
+      const remaining = input.mode === 'REPLACE_HIDDEN'
+        ? await repository.listTestCases(problemId)
+        : problem.testCases;
+      const offset = remaining.length;
+      for (const [index, test] of generated.entries()) {
+        validateTestCasePayload(test, this.env);
+        await repository.createTestCase(problemId, {
+          name: test.name,
+          visibility: input.visibility,
+          input: test.input,
+          expectedOutput: test.expectedOutput,
+          source: input.source,
+          expectedOutputSource: 'REFERENCE_SOLUTION',
+          referenceFingerprint,
+          generationVersion: PRACTICE_TEST_GENERATION_VERSION,
+          weight: new Prisma.Decimal(test.weight),
+          position: offset + index + 1,
+        });
+      }
+      await repository.updateProblem(problemId, {
+        validationFingerprint: null,
+        validatedAt: null,
+        validationSummaryJson: Prisma.DbNull,
+      });
+      return repository.listTestCases(problemId);
+    });
+
+    return {
+      committed: generated.length,
+      mode: input.mode,
+      source: input.source,
+      referenceFingerprint,
+      publicCount: testCases.filter((test) => test.visibility === TestCaseVisibility.PUBLIC).length,
+      hiddenCount: testCases.filter((test) => test.visibility === TestCaseVisibility.HIDDEN).length,
+      testCases: testCases.map(mapTestCase),
+    };
+  }
+
+  async getAuthoringExecution(instructorId: string, executionId: string) {
+    return { execution: await this.codeExecution.getExecution(instructorId, executionId) };
+  }
+
   async updateTestCase(instructorId: string, testCaseId: string, input: PracticeTestCaseUpdateInput) {
     const testCase = await this.repository.findTestCaseForInstructor(instructorId, testCaseId);
     if (!testCase) {
@@ -598,6 +993,7 @@ export class PracticeService {
       ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
       ...(input.input !== undefined ? { input: input.input } : {}),
       ...(input.expectedOutput !== undefined ? { expectedOutput: input.expectedOutput } : {}),
+      ...(input.expectedOutput !== undefined ? { expectedOutputSource: 'MANUAL', referenceFingerprint: null, generationVersion: null } : {}),
       ...(input.weight !== undefined ? { weight: new Prisma.Decimal(input.weight) } : {}),
       ...(input.position !== undefined ? { position: input.position } : {}),
     });
@@ -609,20 +1005,73 @@ export class PracticeService {
     return { testCase: mapTestCase(updated) };
   }
 
-  async deleteTestCase(instructorId: string, testCaseId: string) {
-    const testCase = await this.repository.findTestCaseForInstructor(instructorId, testCaseId);
+  async deleteTestCase(instructorId: string, testCaseId: string, roles: readonly RoleName[] = [RoleName.INSTRUCTOR]) {
+    const testCase = await this.repository.findTestCaseForAuthor(
+      instructorId,
+      testCaseId,
+      this.canManageAllPracticeProblems(roles),
+    );
     if (!testCase) {
       throw practiceTestCaseNotFound();
     }
     if (testCase.problem.status !== PracticeProblemStatus.DRAFT) {
       throw practiceProblemInvalid('Only draft practice problems can be edited');
     }
-    await this.repository.deleteTestCase(testCaseId);
-    await this.repository.updateProblem(testCase.practiceProblemId, {
-      validationFingerprint: null,
-      validatedAt: null,
-      validationSummaryJson: Prisma.DbNull,
+    await this.prisma.$transaction(async (transaction) => {
+      const repository = new PracticeRepository(transaction);
+      await repository.deleteTestCase(testCaseId);
+      await this.compactTestCasePositions(repository, testCase.practiceProblemId);
+      await this.invalidateProblemValidation(repository, testCase.practiceProblemId);
     });
+  }
+
+  async deleteHiddenTestCases(instructorId: string, problemId: string, roles: readonly RoleName[] = [RoleName.INSTRUCTOR]) {
+    return this.deleteHiddenTestCasesMatching(instructorId, problemId, roles);
+  }
+
+  async deleteHiddenTestCasesBySource(
+    instructorId: string,
+    problemId: string,
+    source: PracticeHiddenTestCaseSource,
+    roles: readonly RoleName[] = [RoleName.INSTRUCTOR],
+  ) {
+    return this.deleteHiddenTestCasesMatching(instructorId, problemId, roles, source);
+  }
+
+  private async deleteHiddenTestCasesMatching(
+    userId: string,
+    problemId: string,
+    roles: readonly RoleName[],
+    source?: PracticeHiddenTestCaseSource,
+  ) {
+    const problem = await this.repository.findProblemForAuthor(userId, problemId, this.canManageAllPracticeProblems(roles));
+    if (!problem) {
+      throw practiceProblemNotOwned();
+    }
+    if (problem.status !== PracticeProblemStatus.DRAFT) {
+      throw practiceProblemInvalid('Only draft practice problems can be edited');
+    }
+
+    const result = await this.prisma.$transaction(async (transaction) => {
+      const repository = new PracticeRepository(transaction);
+      const deleted = source
+        ? await repository.deleteHiddenTestCasesBySource(problemId, source)
+        : await repository.deleteHiddenTestCases(problemId);
+      if (deleted.count > 0) {
+        await this.compactTestCasePositions(repository, problemId);
+        await this.invalidateProblemValidation(repository, problemId);
+      }
+      const testCases = await repository.listTestCases(problemId);
+      return { deleted: deleted.count, testCases };
+    });
+
+    return {
+      deleted: result.deleted,
+      source: source ?? null,
+      publicCount: result.testCases.filter((test) => test.visibility === TestCaseVisibility.PUBLIC).length,
+      hiddenCount: result.testCases.filter((test) => test.visibility === TestCaseVisibility.HIDDEN).length,
+      testCases: result.testCases.map(mapTestCase),
+    };
   }
 
   async reorderTestCases(instructorId: string, problemId: string, orderedIds: readonly string[]) {
@@ -651,8 +1100,11 @@ export class PracticeService {
     if (!problem) {
       throw practiceProblemNotOwned();
     }
-    const submissions = await this.repository.countProblemSubmissions(problemId);
-    if (submissions > 0) {
+    const [submissions, linkedCheckpoints] = await Promise.all([
+      this.repository.countProblemSubmissions(problemId),
+      this.repository.countProblemVideoCheckpoints(problemId),
+    ]);
+    if (submissions > 0 || linkedCheckpoints > 0) {
       await this.repository.updateProblem(problemId, { status: PracticeProblemStatus.ARCHIVED, archivedAt: new Date() });
       return;
     }

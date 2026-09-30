@@ -41,6 +41,13 @@ export class PracticeRepository {
     });
   }
 
+  async findProblemForAuthor(userId: string, problemId: string, canManageAll: boolean) {
+    return this.prisma.practiceProblem.findFirst({
+      where: { id: problemId, ...(canManageAll ? {} : { createdByUserId: userId }) },
+      include: practiceProblemInclude,
+    });
+  }
+
   async updateProblem(problemId: string, data: Prisma.PracticeProblemUpdateInput) {
     return this.prisma.practiceProblem.update({ where: { id: problemId }, data, include: practiceProblemInclude });
   }
@@ -51,6 +58,10 @@ export class PracticeRepository {
 
   async countProblemSubmissions(problemId: string) {
     return this.prisma.judgeSubmission.count({ where: { practiceProblemId: problemId } });
+  }
+
+  async countProblemVideoCheckpoints(problemId: string) {
+    return this.prisma.videoCheckpoint.count({ where: { practiceProblemId: problemId } });
   }
 
   async listInstructorProblems(instructorId: string, query: InstructorPracticeListQuery) {
@@ -156,9 +167,24 @@ export class PracticeRepository {
     await this.prisma.practiceProblemTestCase.deleteMany({ where: { practiceProblemId: problemId } });
   }
 
+  async deleteHiddenTestCases(problemId: string) {
+    return this.prisma.practiceProblemTestCase.deleteMany({ where: { practiceProblemId: problemId, visibility: 'HIDDEN' } });
+  }
+
+  async deleteHiddenTestCasesBySource(problemId: string, source: string) {
+    return this.prisma.practiceProblemTestCase.deleteMany({ where: { practiceProblemId: problemId, visibility: 'HIDDEN', source } });
+  }
+
   async findTestCaseForInstructor(instructorId: string, testCaseId: string) {
     return this.prisma.practiceProblemTestCase.findFirst({
       where: { id: testCaseId, problem: { createdByUserId: instructorId } },
+      include: { problem: true },
+    });
+  }
+
+  async findTestCaseForAuthor(userId: string, testCaseId: string, canManageAll: boolean) {
+    return this.prisma.practiceProblemTestCase.findFirst({
+      where: { id: testCaseId, ...(canManageAll ? {} : { problem: { createdByUserId: userId } }) },
       include: { problem: true },
     });
   }

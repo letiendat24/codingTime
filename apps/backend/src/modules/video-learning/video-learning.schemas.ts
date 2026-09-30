@@ -35,6 +35,7 @@ export const practiceStepConfigSchema = z.object({
   practiceEnabled: z.coerce.boolean().optional(),
   practiceVerificationMode: z.nativeEnum(VideoPracticeVerificationMode).optional(),
   practiceBehavior: z.nativeEnum(VideoPracticeBehavior).optional(),
+  practiceProblemId: z.string().uuid().optional().nullable(),
   overrideVerification: z.nativeEnum(VideoPracticeVerificationMode).optional().nullable(),
   overrideBehavior: z.nativeEnum(VideoPracticeBehavior).optional().nullable(),
   practiceSnapshotId: z.string().uuid().optional().nullable(),
