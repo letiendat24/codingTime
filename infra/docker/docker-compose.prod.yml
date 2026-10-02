@@ -16,7 +16,7 @@ services:
     restart: unless-stopped
 
   frontend:
-    image: codesync/frontend:${CODESYNC_IMAGE_TAG:-local}
+    image: ${CODESYNC_IMAGE_REPOSITORY:-codesync}/frontend:${CODESYNC_IMAGE_TAG:-local}
     build:
       context: ../..
       dockerfile: apps/frontend/Dockerfile
@@ -30,7 +30,7 @@ services:
     restart: unless-stopped
 
   backend:
-    image: codesync/backend:${CODESYNC_IMAGE_TAG:-local}
+    image: ${CODESYNC_IMAGE_REPOSITORY:-codesync}/backend:${CODESYNC_IMAGE_TAG:-local}
     build:
       context: ../..
       dockerfile: apps/backend/Dockerfile
@@ -61,7 +61,7 @@ services:
     restart: unless-stopped
 
   backend-migrate:
-    image: codesync/backend:${CODESYNC_IMAGE_TAG:-local}
+    image: ${CODESYNC_IMAGE_REPOSITORY:-codesync}/backend:${CODESYNC_IMAGE_TAG:-local}
     build:
       context: ../..
       dockerfile: apps/backend/Dockerfile
@@ -76,7 +76,7 @@ services:
     restart: "no"
 
   video-worker:
-    image: codesync/worker-video-processing:${CODESYNC_IMAGE_TAG:-local}
+    image: ${CODESYNC_IMAGE_REPOSITORY:-codesync}/worker-video-processing:${CODESYNC_IMAGE_TAG:-local}
     build:
       context: ../..
       dockerfile: apps/workers/video-processing/Dockerfile
@@ -93,7 +93,7 @@ services:
     restart: unless-stopped
 
   code-worker:
-    image: codesync/worker-code-execution:${CODESYNC_IMAGE_TAG:-local}
+    image: ${CODESYNC_IMAGE_REPOSITORY:-codesync}/worker-code-execution:${CODESYNC_IMAGE_TAG:-local}
     build:
       context: ../..
       dockerfile: apps/workers/code-execution/Dockerfile
@@ -108,7 +108,7 @@ services:
     restart: unless-stopped
 
   code-judge-worker:
-    image: codesync/worker-code-judge:${CODESYNC_IMAGE_TAG:-local}
+    image: ${CODESYNC_IMAGE_REPOSITORY:-codesync}/worker-code-judge:${CODESYNC_IMAGE_TAG:-local}
     build:
       context: ../..
       dockerfile: apps/workers/code-judge/Dockerfile
@@ -123,7 +123,7 @@ services:
     restart: unless-stopped
 
   project-grading-worker:
-    image: codesync/worker-project-grading:${CODESYNC_IMAGE_TAG:-local}
+    image: ${CODESYNC_IMAGE_REPOSITORY:-codesync}/worker-project-grading:${CODESYNC_IMAGE_TAG:-local}
     build:
       context: ../..
       dockerfile: apps/workers/project-grading/Dockerfile
