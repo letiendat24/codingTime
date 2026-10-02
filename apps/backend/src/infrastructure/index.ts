@@ -61,9 +61,17 @@ export async function initializeInfrastructure(
 
   await prisma.$connect();
   await redis.connect();
-  await storage.bucketExists(env.MINIO_BUCKET).catch((error: unknown) => {
-    logger.warn({ error, bucket: env.MINIO_BUCKET }, 'MinIO bucket is not available yet');
-  });
+  await storage
+    .bucketExists(env.MINIO_BUCKET)
+    .then(async (exists) => {
+      if (!exists) {
+        await storage.makeBucket(env.MINIO_BUCKET);
+        logger.info({ bucket: env.MINIO_BUCKET }, 'MinIO bucket created');
+      }
+    })
+    .catch((error: unknown) => {
+      logger.warn({ error, bucket: env.MINIO_BUCKET }, 'MinIO bucket is not available yet');
+    });
   const videoPublisherChannel = await setupVideoTopology(rabbitmq, env.VIDEO_PROCESSING_MAX_ATTEMPTS);
   const codeExecutionPublisherChannel = await setupCodeExecutionTopology(rabbitmq, env.CODE_EXECUTION_MAX_ATTEMPTS);
   const judgePublisherChannel = await setupJudgeTopology(rabbitmq, env.JUDGE_MAX_ATTEMPTS);
