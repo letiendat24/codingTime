@@ -1,34 +1,31 @@
 FROM node:22.13.1-alpine AS build
 
-WORKDIR /workspace
+WORKDIR /app
 
-RUN corepack enable
+RUN npm install -g pnpm@11.10.0
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY packages/config/package.json packages/config/package.json
-COPY packages/config/tsconfig.node.json packages/config/tsconfig.node.json
-COPY packages/config/tsconfig.base.json packages/config/tsconfig.base.json
-COPY packages/shared/package.json packages/shared/package.json
-COPY packages/shared/tsconfig.json packages/shared/tsconfig.json
-COPY apps/workers/code-judge/package.json apps/workers/code-judge/package.json
+COPY packages ./packages
+COPY apps/workers/code-judge ./apps/workers/code-judge
 
 RUN pnpm install --filter @codesync/worker-code-judge... --frozen-lockfile
-
-COPY packages/shared packages/shared
-COPY apps/workers/code-judge apps/workers/code-judge
-
 RUN pnpm --filter @codesync/shared build
 RUN pnpm --filter @codesync/worker-code-judge build
 
+FROM docker:27-cli AS docker-cli
+
 FROM node:22.13.1-alpine AS runtime
+
+ENV NODE_ENV=production
 
 WORKDIR /app
 
-RUN apk add --no-cache docker-cli
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 
-COPY --from=build /workspace/node_modules /workspace/node_modules
-COPY --from=build /workspace/packages/shared /workspace/packages/shared
-COPY --from=build /workspace/apps/workers/code-judge/dist /app/dist
-COPY --from=build /workspace/apps/workers/code-judge/package.json /app/package.json
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/packages/shared ./packages/shared
+COPY --from=build /app/apps/workers/code-judge/package.json ./apps/workers/code-judge/package.json
+COPY --from=build /app/apps/workers/code-judge/node_modules ./apps/workers/code-judge/node_modules
+COPY --from=build /app/apps/workers/code-judge/dist ./apps/workers/code-judge/dist
 
-CMD ["node", "dist/main.js"]
+CMD ["node", "apps/workers/code-judge/dist/main.js"]

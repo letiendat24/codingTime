@@ -13,11 +13,23 @@
     "test": "pnpm -r --workspace-concurrency=1 --if-present test",
     "typecheck": "pnpm -r --if-present typecheck",
     "format": "prettier --write .",
-    "db:migrate": "pnpm --filter @codesync/backend db:migrate",
+    "db:generate": "pnpm --filter @codesync/backend db:generate",
+    "db:migrate": "pnpm --filter @codesync/backend db:migrate:dev",
+    "db:migrate:dev": "pnpm --filter @codesync/backend db:migrate:dev",
+    "db:migrate:deploy": "pnpm --filter @codesync/backend db:migrate:deploy",
     "db:seed": "pnpm --filter @codesync/backend db:seed",
     "seed:demo": "pnpm --filter @codesync/backend seed:demo",
     "infra:up": "docker compose -f infra/docker/docker-compose.yml up -d",
-    "infra:down": "docker compose -f infra/docker/docker-compose.yml down"
+    "infra:down": "docker compose -f infra/docker/docker-compose.yml down",
+    "infra:logs": "docker compose -f infra/docker/docker-compose.yml logs -f",
+    "docker:prod:build": "COMPOSE_PARALLEL_LIMIT=1 docker compose --env-file .env.production -f infra/docker/docker-compose.prod.yml build",
+    "docker:prod:config": "docker compose --env-file .env.production -f infra/docker/docker-compose.prod.yml config",
+    "docker:prod:infra": "docker compose --env-file .env.production -f infra/docker/docker-compose.prod.yml up -d postgres redis rabbitmq minio minio-init",
+    "docker:prod:up": "docker compose --env-file .env.production -f infra/docker/docker-compose.prod.yml up -d reverse-proxy frontend backend video-worker code-worker code-judge-worker project-grading-worker",
+    "docker:prod:down": "docker compose --env-file .env.production -f infra/docker/docker-compose.prod.yml down",
+    "docker:prod:logs": "docker compose --env-file .env.production -f infra/docker/docker-compose.prod.yml logs -f",
+    "docker:prod:ps": "docker compose --env-file .env.production -f infra/docker/docker-compose.prod.yml ps",
+    "docker:prod:migrate": "docker compose --env-file .env.production -f infra/docker/docker-compose.prod.yml run --rm backend-migrate"
   },
   "engines": {
     "node": ">=22.13.0"

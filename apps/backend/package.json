@@ -10,7 +10,10 @@
     "test": "tsx prisma/test-runner.ts",
     "test:integration": "vitest run",
     "prisma:generate": "if [ -f ../../.env ]; then set -a; . ../../.env; set +a; fi; prisma generate --schema prisma/schema.prisma",
-    "db:migrate": "if [ -f ../../.env ]; then set -a; . ../../.env; set +a; fi; prisma migrate deploy --schema prisma/schema.prisma",
+    "db:generate": "pnpm prisma:generate",
+    "db:migrate": "pnpm db:migrate:deploy",
+    "db:migrate:dev": "if [ -f ../../.env ]; then set -a; . ../../.env; set +a; fi; prisma migrate dev --schema prisma/schema.prisma",
+    "db:migrate:deploy": "if [ -f ../../.env ]; then set -a; . ../../.env; set +a; fi; prisma migrate deploy --schema prisma/schema.prisma",
     "db:seed": "tsx prisma/seed.ts",
     "seed:demo": "if [ -f ../../.env ]; then set -a; . ../../.env; set +a; fi; node --import tsx prisma/demo-seed.ts",
     "typecheck": "pnpm prisma:generate && tsc -p tsconfig.json --noEmit"
