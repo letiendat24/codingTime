@@ -678,6 +678,7 @@ describe('practice center integration', () => {
       .delete(`/api/v1/instructor/practice/problems/${problemId}/test-cases/hidden/source/GENERATOR`)
       .set('Authorization', `Bearer ${instructor.token}`)
       .send();
+    const invalidatedProblem = await prisma.practiceProblem.findUniqueOrThrow({ where: { id: problemId } });
     const stalePublish = await request(app)
       .post(`/api/v1/instructor/practice/problems/${problemId}/publish`)
       .set('Authorization', `Bearer ${instructor.token}`)
@@ -705,7 +706,7 @@ describe('practice center integration', () => {
     expect(deletedGenerator.body.testCases).toHaveLength(10);
     expect(deletedGenerator.body.testCases.some((test: { readonly source?: string }) => test.source === 'GENERATOR')).toBe(false);
     expect(deletedGenerator.body.testCases.filter((test: { readonly source?: string }) => test.source === 'IMPORT')).toHaveLength(8);
-    expect((await prisma.practiceProblem.findUniqueOrThrow({ where: { id: problemId } })).validatedAt).toBeNull();
+    expect(invalidatedProblem.validatedAt).toBeNull();
     expect(stalePublish.status).toBe(422);
     expect(JSON.stringify(stalePublish.body)).toContain('Problem content changed after the last successful validation');
     expect(revalidated.body.valid).toBe(true);
