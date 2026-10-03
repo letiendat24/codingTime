@@ -176,10 +176,10 @@ export function resolvePlaybackUrl(url: string, token?: string): string {
   if (url.startsWith('http://') || url.startsWith('https://')) {
     fullUrl = url;
   } else if (url.startsWith('/api/v1')) {
-    const apiOrigin = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api/v1').replace(/\/api\/v1\/?$/, '');
+    const apiOrigin = (process.env.NEXT_PUBLIC_API_URL ?? '/api/v1').replace(/\/api\/v1\/?$/, '');
     fullUrl = `${apiOrigin}${url}`;
   } else if (url.startsWith('/')) {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api/v1';
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? '/api/v1';
     fullUrl = `${apiUrl}${url}`;
   } else {
     fullUrl = url;
