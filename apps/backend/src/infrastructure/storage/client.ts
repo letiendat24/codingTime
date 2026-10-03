@@ -12,6 +12,7 @@ function createPublicPresignClient(env: Env): Client {
     useSSL: publicEndpoint.protocol === 'https:',
     accessKey: env.MINIO_ACCESS_KEY,
     secretKey: env.MINIO_SECRET_KEY,
+    region: 'us-east-1',
   });
 }
 
