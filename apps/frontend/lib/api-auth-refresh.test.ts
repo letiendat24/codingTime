@@ -136,7 +136,7 @@ describe('Authentication Refresh & Session Recovery', () => {
 
     expect(results).toHaveLength(10);
     results.forEach((res, i) => {
-      expect(res.data).toBe(`success for http://localhost:4000/api/v1/resource-${i}`);
+      expect(res.data).toBe(`success for /api/v1/resource-${i}`);
     });
 
     // Exactly 1 refresh network call was executed!
