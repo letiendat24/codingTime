@@ -137,6 +137,7 @@ services:
       CODE_EXECUTION_TEMP_ROOT: ${CODE_EXECUTION_TEMP_ROOT:-/tmp/codesync-code-execution}
     volumes:
       - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+      - ${CODE_EXECUTION_TEMP_ROOT:-/tmp/codesync-code-execution}:${CODE_EXECUTION_TEMP_ROOT:-/tmp/codesync-code-execution}
     restart: unless-stopped
 
   code-judge-worker:
@@ -159,6 +160,7 @@ services:
       JUDGE_TEMP_ROOT: ${JUDGE_TEMP_ROOT:-/tmp/codesync-judge}
     volumes:
       - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+      - ${JUDGE_TEMP_ROOT:-/tmp/codesync-judge}:${JUDGE_TEMP_ROOT:-/tmp/codesync-judge}
     restart: unless-stopped
 
   project-grading-worker:
@@ -182,6 +184,7 @@ services:
       PROJECT_GRADING_TEMP_ROOT: ${PROJECT_GRADING_TEMP_ROOT:-/tmp/codesync-project-grading}
     volumes:
       - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+      - ${PROJECT_GRADING_TEMP_ROOT:-/tmp/codesync-project-grading}:${PROJECT_GRADING_TEMP_ROOT:-/tmp/codesync-project-grading}
     restart: unless-stopped
 
 volumes:

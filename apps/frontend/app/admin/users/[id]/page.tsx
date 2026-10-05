@@ -2,35 +2,39 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowLeft, ShieldCheck, UserX, UserCheck, Save, History } from 'lucide-react';
 import Link from 'next/link';
 import { type AdminUserDetail, requestJson } from '../../../../lib/api';
 import { AdminError, StatusBadge, formatDate } from '../../admin-components';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../../../design-system/components/card';
 import { Button } from '../../../../design-system/components/button';
-import { Input } from '../../../../design-system/components/input';
 import { Badge } from '../../../../design-system/components/badge';
 import { LoadingState } from '../../../../design-system/components/loading-state';
+import { Checkbox } from '../../../../design-system/components/checkbox';
+
+const editableRoles = ['STUDENT', 'INSTRUCTOR', 'ADMIN'] as const;
+type EditableRole = (typeof editableRoles)[number];
 
 export default function AdminUserDetailPage() {
   const params = useParams<{ id: string }>();
   const queryClient = useQueryClient();
-  const [rolesText, setRolesText] = useState('');
-  const [isRolesInitialized, setIsRolesInitialized] = useState(false);
+  const [selectedRoles, setSelectedRoles] = useState<EditableRole[]>([]);
+  const [roleError, setRoleError] = useState<string | null>(null);
 
   const user = useQuery({
     queryKey: ['admin-user', params.id],
     queryFn: async () => {
       const body = await requestJson<{ user: AdminUserDetail }>(`/admin/users/${params.id}`);
-      if (!isRolesInitialized) {
-        setRolesText(body.user.roles.join(', '));
-        setIsRolesInitialized(true);
-      }
       return body.user;
     },
     retry: false,
   });
+
+  useEffect(() => {
+    if (!user.data) return;
+    setSelectedRoles(user.data.roles.filter((role): role is EditableRole => editableRoles.includes(role as EditableRole)));
+  }, [user.data]);
 
   const statusMutation = useMutation({
     mutationFn: (status: string) =>
@@ -46,12 +50,25 @@ export default function AdminUserDetailPage() {
       requestJson(`/admin/users/${params.id}/roles`, {
         method: 'PUT',
         body: JSON.stringify({
-          roles: rolesText.split(',').map((role) => role.trim()).filter(Boolean),
+          roles: selectedRoles,
           reason: 'admin detail role update',
         }),
       }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-user', params.id] }),
+    onMutate: () => setRoleError(null),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['admin-user', params.id] });
+      await queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+    },
+    onError: (error) => setRoleError(error instanceof Error ? error.message : 'Role update failed.'),
   });
+
+  function toggleRole(role: EditableRole, enabled: boolean) {
+    setRoleError(null);
+    setSelectedRoles((current) => {
+      const next = enabled ? [...current, role] : current.filter((item) => item !== role);
+      return editableRoles.filter((item) => next.includes(item));
+    });
+  }
 
   if (user.isError) return <AdminError message={user.error instanceof Error ? user.error.message : undefined} />;
   if (user.isLoading) {
@@ -156,20 +173,32 @@ export default function AdminUserDetailPage() {
                 <CardTitle>Role Permissions</CardTitle>
               </div>
               <CardDescription>
-                Assign or revoke roles (STUDENT, INSTRUCTOR, ADMIN) separated by commas.
+                Grant or revoke platform roles for this account.
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="flex gap-3">
-                <Input
-                  className="flex-1"
-                  value={rolesText}
-                  onChange={(event) => setRolesText(event.target.value)}
-                  placeholder="e.g. STUDENT, INSTRUCTOR, ADMIN"
-                />
+              <div className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {editableRoles.map((role) => (
+                    <div key={role} className="rounded-lg border border-border bg-background p-3">
+                      <Checkbox
+                        id={`role-${role}`}
+                        label={role}
+                        checked={selectedRoles.includes(role)}
+                        onChange={(event) => toggleRole(role, event.target.checked)}
+                      />
+                    </div>
+                  ))}
+                </div>
+                {roleError ? (
+                  <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                    {roleError}
+                  </p>
+                ) : null}
                 <Button
                   onClick={() => roleMutation.mutate()}
                   isLoading={roleMutation.isPending}
+                  disabled={selectedRoles.length === 0}
                   leftIcon={<Save className="h-4 w-4" />}
                 >
                   Save Roles

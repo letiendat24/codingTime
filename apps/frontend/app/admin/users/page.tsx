@@ -10,6 +10,21 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../..
 import { Button } from '../../../design-system/components/button';
 import { LoadingState } from '../../../design-system/components/loading-state';
 import { Badge } from '../../../design-system/components/badge';
+import { Dialog } from '../../../design-system/components/dialog';
+
+type RolePreset = 'STUDENT' | 'INSTRUCTOR' | 'ADMIN';
+
+function rolePresetFor(roles: readonly string[]): RolePreset {
+  if (roles.includes('ADMIN')) return 'ADMIN';
+  if (roles.includes('INSTRUCTOR')) return 'INSTRUCTOR';
+  return 'STUDENT';
+}
+
+function rolesForPreset(role: RolePreset): readonly string[] {
+  if (role === 'INSTRUCTOR') return ['STUDENT', 'INSTRUCTOR'];
+  if (role === 'ADMIN') return ['STUDENT', 'ADMIN'];
+  return ['STUDENT'];
+}
 
 export default function AdminUsersPage() {
   const queryClient = useQueryClient();
@@ -17,6 +32,11 @@ export default function AdminUsersPage() {
   const [role, setRole] = useState('');
   const [status, setStatus] = useState('');
   const [page, setPage] = useState(1);
+  const [pendingRoleChange, setPendingRoleChange] = useState<{
+    readonly user: AdminUserSummary;
+    readonly preset: RolePreset;
+    readonly roles: readonly string[];
+  } | null>(null);
 
   const query = new URLSearchParams({
     page: String(page),
@@ -39,6 +59,18 @@ export default function AdminUsersPage() {
         body: JSON.stringify({ status: nextStatus, reason: 'admin console action' }),
       }),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+    },
+  });
+
+  const roleMutation = useMutation({
+    mutationFn: ({ userId, roles }: { userId: string; roles: readonly string[] }) =>
+      requestJson(`/admin/users/${userId}/roles`, {
+        method: 'PUT',
+        body: JSON.stringify({ roles, reason: 'admin console role update' }),
+      }),
+    onSuccess: () => {
+      setPendingRoleChange(null);
       void queryClient.invalidateQueries({ queryKey: ['admin-users'] });
     },
   });
@@ -133,32 +165,46 @@ export default function AdminUsersPage() {
                       <td className="px-6 py-4 text-xs text-muted-foreground">
                         {formatDate(user.createdAt)}
                       </td>
-                      <td className="px-6 py-4 text-right">
-                        {user.status === 'ACTIVE' ? (
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={() =>
-                              statusMutation.mutate({ userId: user.id, nextStatus: 'SUSPENDED' })
-                            }
-                            isLoading={statusMutation.isPending && statusMutation.variables?.userId === user.id}
-                            leftIcon={<UserX className="h-3.5 w-3.5" />}
+                      <td className="px-6 py-4">
+                        <div className="flex justify-end gap-2">
+                          <SelectInput
+                            aria-label={`Change role for ${user.displayName}`}
+                            value={rolePresetFor(user.roles)}
+                            onChange={(event) => {
+                              const preset = event.target.value as RolePreset;
+                              setPendingRoleChange({ user, preset, roles: rolesForPreset(preset) });
+                            }}
                           >
-                            Suspend
-                          </Button>
-                        ) : (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() =>
-                              statusMutation.mutate({ userId: user.id, nextStatus: 'ACTIVE' })
-                            }
-                            isLoading={statusMutation.isPending && statusMutation.variables?.userId === user.id}
-                            leftIcon={<UserCheck className="h-3.5 w-3.5" />}
-                          >
-                            Activate
-                          </Button>
-                        )}
+                            <option value="STUDENT">Student</option>
+                            <option value="INSTRUCTOR">Instructor</option>
+                            <option value="ADMIN">Admin</option>
+                          </SelectInput>
+                          {user.status === 'ACTIVE' ? (
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() =>
+                                statusMutation.mutate({ userId: user.id, nextStatus: 'SUSPENDED' })
+                              }
+                              isLoading={statusMutation.isPending && statusMutation.variables?.userId === user.id}
+                              leftIcon={<UserX className="h-3.5 w-3.5" />}
+                            >
+                              Suspend
+                            </Button>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() =>
+                                statusMutation.mutate({ userId: user.id, nextStatus: 'ACTIVE' })
+                              }
+                              isLoading={statusMutation.isPending && statusMutation.variables?.userId === user.id}
+                              leftIcon={<UserCheck className="h-3.5 w-3.5" />}
+                            >
+                              Activate
+                            </Button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -175,6 +221,73 @@ export default function AdminUsersPage() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog
+        open={pendingRoleChange !== null}
+        onClose={() => {
+          if (!roleMutation.isPending) setPendingRoleChange(null);
+        }}
+        title="Confirm role change"
+        description="This will update the user's platform permissions and revoke active sessions."
+      >
+        {pendingRoleChange ? (
+          <div className="space-y-5">
+            <div className="rounded-lg border border-border bg-background p-4">
+              <p className="font-medium text-foreground">{pendingRoleChange.user.displayName}</p>
+              <p className="text-sm text-muted-foreground">{pendingRoleChange.user.email}</p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Current roles</p>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {pendingRoleChange.user.roles.map((item) => (
+                      <Badge key={item} variant="outline" className="text-xs font-normal">
+                        {item}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">New roles</p>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {pendingRoleChange.roles.map((item) => (
+                      <Badge key={item} variant="outline" className="text-xs font-normal">
+                        {item}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+            {roleMutation.isError ? (
+              <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {roleMutation.error instanceof Error ? roleMutation.error.message : 'Role update failed.'}
+              </p>
+            ) : null}
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setPendingRoleChange(null)}
+                disabled={roleMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                isLoading={roleMutation.isPending}
+                onClick={() =>
+                  roleMutation.mutate({
+                    userId: pendingRoleChange.user.id,
+                    roles: pendingRoleChange.roles,
+                  })
+                }
+              >
+                Confirm
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </Dialog>
     </div>
   );
 }
