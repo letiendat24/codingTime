@@ -245,7 +245,18 @@ export class CodeExecutionRepository {
     });
 
     if (existing) {
-      await this.prisma.workspace.update({ where: { id: existing.id }, data: { lastOpenedAt: input.now } });
+      await this.prisma.workspace.update({
+        where: { id: existing.id },
+        data: {
+          language: input.language,
+          entryFile: input.entryFile,
+          lastOpenedAt: input.now,
+        },
+      });
+      await this.prisma.workspaceFile.createMany({
+        data: input.files.map((file) => ({ workspaceId: existing.id, path: file.path, content: file.content })),
+        skipDuplicates: true,
+      });
       return this.findWorkspaceForUser(input.userId, existing.id);
     }
 

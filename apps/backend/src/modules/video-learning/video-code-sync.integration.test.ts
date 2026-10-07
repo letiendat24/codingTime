@@ -245,9 +245,55 @@ describe('video-code synchronization integration', () => {
     const second = await request(app).post(`/api/v1/learning/lessons/${lesson.id}/workspace`).set('Authorization', `Bearer ${student.token}`).expect(200);
 
     expect(second.body.workspace.id).toBe(first.body.workspace.id);
-    expect(second.body.workspace.files).toEqual([{ path: 'src/index.ts', content: '' }]);
+    expect(second.body.workspace.files).toEqual([{ path: 'src/index.ts', content: 'export const answer = 42;\n' }]);
 
     await request(app).post(`/api/v1/learning/lessons/${lesson.id}/workspace`).set('Authorization', `Bearer ${outsider.token}`).expect(400);
+  });
+
+  it('backfills missing starter snapshot files for existing empty lesson workspaces without overwriting student edits', async () => {
+    const instructor = await createUser([RoleName.INSTRUCTOR]);
+    const student = await createUser([RoleName.STUDENT]);
+    const { lesson, video } = await seedVideoLesson(instructor.id, student.id);
+
+    await prisma.videoCodeAlongConfig.create({
+      data: { lessonId: lesson.id, enabled: true, language: 'typescript', entryFile: 'src/index.ts' },
+    });
+    await prisma.codeSnapshot.create({
+      data: {
+        lessonId: lesson.id,
+        videoAssetId: video!.id,
+        timestampSeconds: 5,
+        title: 'Initial setup',
+        language: 'typescript',
+        filesJson: {
+          files: [{ path: 'src/index.ts', content: 'const numbers = [1, 2, 3, 4, 5, 6];\nconst result = [];\n' }],
+        },
+        createdByUserId: instructor.id,
+      },
+    });
+
+    const legacyWorkspace = await prisma.workspace.create({
+      data: {
+        userId: student.id,
+        lessonId: lesson.id,
+        language: 'typescript',
+        entryFile: 'src/App.tsx',
+        files: { create: [{ path: 'src/App.tsx', content: 'const studentDraft = true;\n' }] },
+      },
+      include: { files: true },
+    });
+
+    const opened = await request(app)
+      .post(`/api/v1/learning/lessons/${lesson.id}/workspace`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .expect(200);
+
+    expect(opened.body.workspace.id).toBe(legacyWorkspace.id);
+    expect(opened.body.workspace.entryFile).toBe('src/index.ts');
+    expect(opened.body.workspace.files).toEqual([
+      { path: 'src/App.tsx', content: 'const studentDraft = true;\n' },
+      { path: 'src/index.ts', content: 'const numbers = [1, 2, 3, 4, 5, 6];\nconst result = [];\n' },
+    ]);
   });
 
   it('treats ready video lessons with instructor snapshots as code-along runtime even without config', async () => {

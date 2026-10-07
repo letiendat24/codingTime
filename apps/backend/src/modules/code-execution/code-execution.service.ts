@@ -106,6 +106,21 @@ function filesFromJson(value: unknown): WorkspaceFileInput[] {
   }));
 }
 
+function starterFilesForVideoCodeAlong(input: {
+  readonly entryFile: string;
+  readonly snapshotFiles: readonly WorkspaceFileInput[];
+}) {
+  const files = input.snapshotFiles.length > 0
+    ? input.snapshotFiles
+    : [{ path: input.entryFile, content: '' }];
+
+  if (files.some((file) => file.path === input.entryFile)) {
+    return files;
+  }
+
+  return [...files, { path: input.entryFile, content: '' }];
+}
+
 function revisionFilesFromJson(value: unknown): WorkspaceFileInput[] {
   return filesFromJson(value);
 }
@@ -276,11 +291,7 @@ export class CodeExecutionService {
         const config = videoLesson.codeAlongConfig?.enabled ? videoLesson.codeAlongConfig : null;
         const language = validateLanguage(config?.language ?? starterSnapshot?.language ?? DEFAULT_LANGUAGE);
         const entryFile = safePath(config?.entryFile ?? snapshotFiles[0]?.path ?? DEFAULT_ENTRY_FILE);
-        const files = config
-          ? [{ path: entryFile, content: '' }]
-          : snapshotFiles.length > 0
-            ? snapshotFiles
-            : [{ path: entryFile, content: '' }];
+        const files = starterFilesForVideoCodeAlong({ entryFile, snapshotFiles });
 
         validateFiles(files, this.env);
 
