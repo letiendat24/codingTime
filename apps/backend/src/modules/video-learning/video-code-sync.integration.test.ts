@@ -487,6 +487,12 @@ describe('video-code synchronization integration', () => {
 
     expect(missingWorkspace.body.practiceProgress.verification.status).toBe('UNAVAILABLE');
 
+    await request(app)
+      .put(`/api/v1/workspaces/${opened.body.workspace.id}/files`)
+      .set('Authorization', `Bearer ${student.token}`)
+      .send({ files: [{ path: 'src/index.ts', content: 'const ready = false;\n' }] })
+      .expect(200);
+
     const mismatch = await request(app)
       .post(`/api/v1/learning/practice-steps/${checkpoint.id}/complete`)
       .set('Authorization', `Bearer ${student.token}`)
