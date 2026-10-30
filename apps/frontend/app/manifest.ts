@@ -1,0 +1,31 @@
+import type { MetadataRoute } from 'next';
+
+export default function manifest(): MetadataRoute.Manifest {
+  return {
+    name: 'CodingTime — Nền Tảng Học Lập Trình Thực Chiến',
+    short_name: 'CodingTime',
+    description:
+      'Nền tảng học lập trình tương tác với video code-along đồng bộ dòng code, Monaco workspace, bài tập thuật toán và dự án thực tế.',
+    start_url: '/',
+    display: 'standalone',
+    background_color: '#0B0F19',
+    theme_color: '#0F172A',
+    icons: [
+      {
+        src: '/icon.svg',
+        sizes: 'any',
+        type: 'image/svg+xml',
+      },
+      {
+        src: '/apple-touch-icon.png',
+        sizes: '180x180',
+        type: 'image/png',
+      },
+      {
+        src: '/favicon.ico',
+        sizes: '32x32',
+        type: 'image/x-icon',
+      },
+    ],
+  };
+}

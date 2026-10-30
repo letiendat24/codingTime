@@ -203,7 +203,14 @@ export default function NotificationsPage() {
 
               <div className="flex items-center gap-2 self-center sm:self-auto">
                 {href ? (
-                  <Link href={href}>
+                  <Link
+                    href={href}
+                    onClick={() => {
+                      if (!item.readAt || !item.seenAt) {
+                        markRead.mutate(item.id);
+                      }
+                    }}
+                  >
                     <Button size="sm" variant="outline">
                       {t('notifications.open')}
                     </Button>

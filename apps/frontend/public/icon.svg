@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B0F19" />
+      <stop offset="50%" stop-color="#0F172A" />
+      <stop offset="100%" stop-color="#020617" />
+    </linearGradient>
+
+    <!-- Ambient Glow Filter -->
+    <radialGradient id="glowGrad" cx="50%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.25" />
+      <stop offset="50%" stop-color="#6366F1" stop-opacity="0.12" />
+      <stop offset="100%" stop-color="#0B0F19" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- Time Arc Gradient (Cyan to Indigo to Violet) -->
+    <linearGradient id="timeArcGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22D3EE" />
+      <stop offset="50%" stop-color="#38BDF8" />
+      <stop offset="100%" stop-color="#818CF8" />
+    </linearGradient>
+
+    <!-- Code Left Bracket Gradient -->
+    <linearGradient id="leftBracketGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#E0F2FE" />
+      <stop offset="100%" stop-color="#38BDF8" />
+    </linearGradient>
+
+    <!-- Code Right Bracket Gradient -->
+    <linearGradient id="rightBracketGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#C7D2FE" />
+      <stop offset="100%" stop-color="#818CF8" />
+    </linearGradient>
+
+    <!-- Clock Slash / Hand Gradient -->
+    <linearGradient id="clockSlashGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#6366F1" />
+      <stop offset="50%" stop-color="#38BDF8" />
+      <stop offset="100%" stop-color="#34D399" />
+    </linearGradient>
+
+    <!-- Border Gradient -->
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.6" />
+      <stop offset="50%" stop-color="#6366F1" stop-opacity="0.3" />
+      <stop offset="100%" stop-color="#1E293B" stop-opacity="0.8" />
+    </linearGradient>
+
+    <!-- Soft Drop Shadow -->
+    <filter id="softGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="10" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Squircle Base -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bgGrad)" />
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#glowGrad)" />
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="none" stroke="url(#borderGrad)" stroke-width="4" />
+
+  <!-- Time Dial Track (Outer Subtle Ring) -->
+  <circle cx="256" cy="256" r="172" fill="none" stroke="#334155" stroke-width="6" stroke-opacity="0.4" stroke-dasharray="8 12" />
+
+  <!-- Dynamic Progress Time Arc (from ~12:00 o'clock clockwise to ~8:30 o'clock) -->
+  <path
+    d="M 256 84
+       A 172 172 0 1 1 118 358"
+    fill="none"
+    stroke="url(#timeArcGrad)"
+    stroke-width="12"
+    stroke-linecap="round"
+    filter="url(#softGlow)"
+  />
+
+  <!-- Active Time Pulse Indicator (Glowing dot at the arc head) -->
+  <circle cx="118" cy="358" r="9" fill="#22D3EE" filter="url(#softGlow)" />
+  <circle cx="118" cy="358" r="4" fill="#FFFFFF" />
+
+  <!-- Hour Tick Marks at 12, 3, 6 o'clock -->
+  <circle cx="256" cy="98" r="4" fill="#64748B" />
+  <circle cx="414" cy="256" r="4" fill="#64748B" />
+  <circle cx="256" cy="414" r="4" fill="#64748B" />
+
+  <!-- Coding Elements: Left Bracket < -->
+  <path
+    d="M 192 188
+       L 132 256
+       L 192 324"
+    fill="none"
+    stroke="url(#leftBracketGrad)"
+    stroke-width="28"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Coding Elements: Right Bracket > -->
+  <path
+    d="M 320 188
+       L 380 256
+       L 320 324"
+    fill="none"
+    stroke="url(#rightBracketGrad)"
+    stroke-width="28"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Center Slash as Chronometer Hand (points at ~2 o'clock, with glowing pivot) -->
+  <path
+    d="M 226 338
+       L 286 174"
+    fill="none"
+    stroke="url(#clockSlashGrad)"
+    stroke-width="26"
+    stroke-linecap="round"
+    filter="url(#softGlow)"
+  />
+
+  <!-- Chronometer Center Pivot Pulse -->
+  <circle cx="256" cy="256" r="7" fill="#38BDF8" />
+  <circle cx="256" cy="256" r="3" fill="#FFFFFF" />
+
+  <!-- Top Accent Sparkle (Time Synchronized) -->
+  <circle cx="286" cy="174" r="5" fill="#34D399" filter="url(#softGlow)" />
+</svg>

@@ -34,6 +34,7 @@ import { useI18n } from '../../providers/i18n-provider';
 import { useTheme, type ThemeMode } from '../../providers/theme-provider';
 import { cn } from '../../lib/utils';
 import { NotificationBell } from '../notification-bell';
+import { BrandLogo } from '../brand/logo';
 
 interface NavigationItem {
   readonly href: string;
@@ -168,10 +169,7 @@ export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
             className="flex items-center gap-2.5 font-bold tracking-tight text-foreground hover:opacity-90 transition-opacity"
             href={homeHref}
           >
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-foreground text-background font-black text-xs shadow-2xs">
-              CS
-            </div>
-            <span className="text-[17px] font-bold tracking-tight">CodeSync</span>
+            <BrandLogo size="md" />
           </Link>
         </div>
 
@@ -285,12 +283,7 @@ export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
                 />
                 <aside className="relative h-full w-72 max-w-[85vw] border-r border-border/60 bg-card shadow-2xl flex flex-col animate-in slide-in-from-left duration-200">
                   <div className="flex h-14 items-center justify-between border-b border-border/60 px-4 shrink-0">
-                    <div className="flex items-center gap-2.5 font-bold">
-                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-foreground text-xs text-background font-black">
-                        CS
-                      </div>
-                      <span className="text-base font-bold">CodeSync</span>
-                    </div>
+                    <BrandLogo size="sm" />
                     <IconButton label="Close navigation" onClick={() => setMobileOpen(false)}>
                       <X className="h-4 w-4" />
                     </IconButton>

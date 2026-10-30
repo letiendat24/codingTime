@@ -30,6 +30,16 @@ export class NotificationController {
     response.status(200).json(await this.notifications.unreadCount(auth.userId));
   };
 
+  unseenCount = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    response.status(200).json(await this.notifications.unseenCount(auth.userId));
+  };
+
+  seenAll = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    response.status(200).json(await this.notifications.markAllSeen(auth.userId));
+  };
+
   markRead = async (request: Request, response: Response) => {
     const auth = requireRequestAuth(request);
     const params = notificationIdParamSchema.parse(request.params);

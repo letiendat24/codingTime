@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { type CurrentUser, requestJson } from '../lib/api';
 import { navigationForRoles } from '../lib/navigation';
+import { BrandLogo } from './brand/logo';
 import { NotificationBell } from './notification-bell';
 
 export function AppNavigation() {
@@ -22,7 +23,7 @@ export function AppNavigation() {
     <nav className="border-b bg-background">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-4 px-6 py-3 text-sm">
         <Link className="font-semibold text-foreground" href="/">
-          CodeSync
+          <BrandLogo size="sm" />
         </Link>
         {items.map((item) => (
           <Link key={item.href} className="text-muted-foreground hover:text-foreground" href={item.href}>

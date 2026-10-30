@@ -35,6 +35,7 @@ function mapNotification(notification: Notification) {
     message: notification.message,
     data: notification.dataJson,
     actionUrl: notification.actionUrl,
+    seenAt: notification.seenAt?.toISOString() ?? null,
     readAt: notification.readAt?.toISOString() ?? null,
     createdAt: notification.createdAt.toISOString(),
     updatedAt: notification.updatedAt.toISOString(),
@@ -122,6 +123,15 @@ export class NotificationService {
 
   async unreadCount(userId: string) {
     return { count: await this.repository.countUnreadForUser(userId) };
+  }
+
+  async unseenCount(userId: string) {
+    return { count: await this.repository.countUnseenForUser(userId) };
+  }
+
+  async markAllSeen(userId: string) {
+    const result = await this.repository.markAllSeen(userId, new Date());
+    return { updatedCount: result.count };
   }
 
   async markRead(userId: string, notificationId: string) {
