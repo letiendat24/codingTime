@@ -1474,6 +1474,7 @@ async function seedNotifications(users: readonly { readonly id: string; readonly
 
   for (const user of users) {
     for (const [index, [type, category, title, message, actionUrl]] of templates.entries()) {
+      const readAt = index % 3 === 0 ? daysAgo(index) : null;
       await prisma.notification.upsert({
         where: { dedupeKey: `demo:${user.email}:${type}` },
         update: {
@@ -1483,7 +1484,8 @@ async function seedNotifications(users: readonly { readonly id: string; readonly
           message,
           actionUrl,
           dataJson: { demoSeed: true, index },
-          readAt: index % 3 === 0 ? daysAgo(index) : null,
+          seenAt: readAt,
+          readAt,
           createdAt: daysAgo(index),
         },
         create: {
@@ -1495,7 +1497,8 @@ async function seedNotifications(users: readonly { readonly id: string; readonly
           actionUrl,
           dataJson: { demoSeed: true, index },
           dedupeKey: `demo:${user.email}:${type}`,
-          readAt: index % 3 === 0 ? daysAgo(index) : null,
+          seenAt: readAt,
+          readAt,
           createdAt: daysAgo(index),
         },
       });

@@ -1405,6 +1405,7 @@ model Notification {
   dataJson   Json?
   actionUrl  String?
   dedupeKey  String?              @unique
+  seenAt     DateTime?
   readAt     DateTime?
   createdAt  DateTime             @default(now())
   updatedAt  DateTime             @updatedAt
@@ -1412,6 +1413,7 @@ model Notification {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
+  @@index([userId, seenAt])
   @@index([userId, readAt])
   @@index([userId, category, createdAt])
   @@index([category])

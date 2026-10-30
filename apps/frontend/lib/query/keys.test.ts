@@ -9,6 +9,7 @@ describe('queryKeys', () => {
 
   it('keeps notification and practice filters inside the key', () => {
     expect(queryKeys.notifications.list({ unread: true })).toEqual(['notifications', 'list', { unread: true }]);
+    expect(queryKeys.notifications.unseenCount).toEqual(['notifications', 'unseen-count']);
     expect(queryKeys.practice.list({ page: 1 })).toEqual(['practice', 'list', { page: 1 }]);
   });
 });

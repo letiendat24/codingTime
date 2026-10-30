@@ -18,9 +18,9 @@ export function NotificationBell() {
   const queryClient = useQueryClient();
   const { locale, t } = useI18n();
 
-  const unread = useQuery({
-    queryKey: queryKeys.notifications.unreadCount,
-    queryFn: () => requestJson<{ count: number }>('/notifications/unread-count'),
+  const unseen = useQuery({
+    queryKey: queryKeys.notifications.unseenCount,
+    queryFn: () => requestJson<{ count: number }>('/notifications/unseen-count'),
     refetchInterval: 45_000,
     retry: false,
   });
@@ -40,6 +40,24 @@ export function NotificationBell() {
     },
   });
 
+  const markAllSeen = useMutation({
+    mutationFn: () => requestJson<{ updatedCount: number }>('/notifications/seen-all', { method: 'POST' }),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.notifications.unseenCount });
+      const previous = queryClient.getQueryData<{ count: number }>(queryKeys.notifications.unseenCount);
+      queryClient.setQueryData(queryKeys.notifications.unseenCount, { count: 0 });
+      return { previous };
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(queryKeys.notifications.unseenCount, context.previous);
+      }
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.notifications.unseenCount });
+    },
+  });
+
   // Close on outside click
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -53,14 +71,22 @@ export function NotificationBell() {
     }
   }, [open]);
 
-  const count = unread.data?.count ?? 0;
+  const count = unseen.data?.count ?? 0;
   const badge = formatUnreadCount(count);
+
+  const toggleOpen = () => {
+    const nextOpen = !open;
+    setOpen(nextOpen);
+    if (nextOpen && !markAllSeen.isPending) {
+      markAllSeen.mutate();
+    }
+  };
 
   return (
     <div className="relative" ref={containerRef}>
       <IconButton
         label={t('common.notifications')}
-        onClick={() => setOpen((value) => !value)}
+        onClick={toggleOpen}
         className="relative"
       >
         <Bell className="h-4.5 w-4.5 text-foreground/80" />

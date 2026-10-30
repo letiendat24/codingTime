@@ -877,6 +877,7 @@ export interface NotificationItem {
   readonly message: string;
   readonly data: unknown;
   readonly actionUrl: string | null;
+  readonly seenAt: string | null;
   readonly readAt: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;

@@ -10,6 +10,8 @@ export function createNotificationRouter(controller: NotificationController, tok
 
   router.get('/', ...authenticated, asyncHandler(controller.list));
   router.get('/unread-count', ...authenticated, asyncHandler(controller.unreadCount));
+  router.get('/unseen-count', ...authenticated, asyncHandler(controller.unseenCount));
+  router.post('/seen-all', ...authenticated, asyncHandler(controller.seenAll));
   router.post('/read-all', ...authenticated, asyncHandler(controller.readAll));
   router.get('/preferences', ...authenticated, asyncHandler(controller.getPreferences));
   router.put('/preferences', ...authenticated, asyncHandler(controller.updatePreferences));

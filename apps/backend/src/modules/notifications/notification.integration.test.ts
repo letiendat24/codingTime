@@ -166,11 +166,18 @@ describe('notifications integration', () => {
       .set('Authorization', `Bearer ${student.token}`)
       .expect(200);
     expect(read.body.notification.readAt).toEqual(expect.any(String));
+    expect(read.body.notification.seenAt).toEqual(expect.any(String));
 
     await request(app)
       .patch(`/api/v1/notifications/${owned.notification?.id}/unread`)
       .set('Authorization', `Bearer ${student.token}`)
       .expect(200);
+    const afterUnread = await request(app)
+      .get('/api/v1/notifications')
+      .set('Authorization', `Bearer ${student.token}`)
+      .expect(200);
+    expect(afterUnread.body.items[0].readAt).toBeNull();
+    expect(afterUnread.body.items[0].seenAt).toEqual(expect.any(String));
     const count = await request(app).get('/api/v1/notifications/unread-count').set('Authorization', `Bearer ${student.token}`).expect(200);
     expect(count.body.count).toBe(1);
 
@@ -178,6 +185,46 @@ describe('notifications integration', () => {
       .patch(`/api/v1/notifications/${owned.notification?.id}/read`)
       .set('Authorization', `Bearer ${other.token}`)
       .expect(404);
+  });
+
+  it('clears the bell count when notifications are seen without marking items read', async () => {
+    const student = await createUser([RoleName.STUDENT]);
+    const other = await createUser([RoleName.STUDENT]);
+    await createNotification(student.id);
+    await createNotification(student.id);
+    await createNotification(other.id);
+
+    const before = await request(app)
+      .get('/api/v1/notifications/unseen-count')
+      .set('Authorization', `Bearer ${student.token}`)
+      .expect(200);
+    expect(before.body.count).toBe(2);
+
+    const seen = await request(app)
+      .post('/api/v1/notifications/seen-all')
+      .set('Authorization', `Bearer ${student.token}`)
+      .expect(200);
+    expect(seen.body.updatedCount).toBe(2);
+
+    const after = await request(app)
+      .get('/api/v1/notifications/unseen-count')
+      .set('Authorization', `Bearer ${student.token}`)
+      .expect(200);
+    expect(after.body.count).toBe(0);
+
+    const list = await request(app)
+      .get('/api/v1/notifications')
+      .set('Authorization', `Bearer ${student.token}`)
+      .expect(200);
+    expect(list.body.items).toHaveLength(2);
+    expect(list.body.items.every((item: { readAt: string | null }) => item.readAt === null)).toBe(true);
+    expect(list.body.items.every((item: { seenAt: string | null }) => typeof item.seenAt === 'string')).toBe(true);
+
+    const otherCount = await request(app)
+      .get('/api/v1/notifications/unseen-count')
+      .set('Authorization', `Bearer ${other.token}`)
+      .expect(200);
+    expect(otherCount.body.count).toBe(1);
   });
 
   it('persists preferences and suppresses disabled categories', async () => {

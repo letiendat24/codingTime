@@ -45,6 +45,7 @@ export const queryKeys = {
     list: (filters?: Record<string, unknown>) => ['notifications', 'list', filters ?? {}] as const,
     recent: ['notifications', 'recent'] as const,
     unreadCount: ['notifications', 'unread-count'] as const,
+    unseenCount: ['notifications', 'unseen-count'] as const,
     preferences: ['notifications', 'preferences'] as const,
   },
   admin: {

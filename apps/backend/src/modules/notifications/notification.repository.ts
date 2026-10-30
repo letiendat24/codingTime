@@ -36,6 +36,10 @@ export class NotificationRepository {
     return this.prisma.notification.count({ where: { userId, readAt: null } });
   }
 
+  async countUnseenForUser(userId: string) {
+    return this.prisma.notification.count({ where: { userId, seenAt: null } });
+  }
+
   async findOwned(userId: string, notificationId: string) {
     return this.prisma.notification.findFirst({ where: { id: notificationId, userId } });
   }
@@ -43,7 +47,7 @@ export class NotificationRepository {
   async markRead(userId: string, notificationId: string, readAt: Date) {
     const result = await this.prisma.notification.updateMany({
       where: { id: notificationId, userId },
-      data: { readAt },
+      data: { readAt, seenAt: readAt },
     });
 
     if (result.count === 0) {
@@ -73,7 +77,14 @@ export class NotificationRepository {
       ...(input.category ? { category: input.category } : {}),
     };
 
-    return this.prisma.notification.updateMany({ where, data: { readAt: input.readAt } });
+    return this.prisma.notification.updateMany({ where, data: { readAt: input.readAt, seenAt: input.readAt } });
+  }
+
+  async markAllSeen(userId: string, seenAt: Date) {
+    return this.prisma.notification.updateMany({
+      where: { userId, seenAt: null },
+      data: { seenAt },
+    });
   }
 
   async getPreference(userId: string) {
