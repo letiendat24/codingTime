@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "Interactive programming learning platform monorepo.",
-  "packageManager": "pnpm@11.10.0",
+  "packageManager": "pnpm@12.16.1",
   "scripts": {
     "dev": "set -a; . ./.env; set +a; pnpm -r --parallel --if-present dev",
     "dev:frontend": "set -a; . ./.env; set +a; pnpm --filter @codesync/frontend dev",

@@ -2,7 +2,7 @@ FROM node:22.13.1-alpine AS build
 
 WORKDIR /app
 
-RUN npm install -g pnpm@11.10.0
+RUN npm install -g pnpm@12.16.1
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages ./packages
