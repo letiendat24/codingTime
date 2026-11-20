@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { Client as MinioClient } from 'minio';
+import { storageBucket, type ObjectStorageClient } from '../../infrastructure/storage/client';
 import type { Request, Response } from 'express';
 import {
   CheckpointProgressStatus,
@@ -866,7 +866,7 @@ export class VideoLearningService {
   constructor(
     private readonly prisma: PrismaClient,
     private readonly repository: VideoLearningRepository,
-    private readonly storage: MinioClient,
+    private readonly storage: ObjectStorageClient,
     private readonly env: Env,
     private readonly logger: AppLogger,
     private readonly learningService: LearningService,
@@ -911,7 +911,7 @@ export class VideoLearningService {
     const filePath = sanitizeHlsPath(rawFilePath);
     const objectKey = `${processedPrefix(video.id)}/${filePath}`;
 
-    await streamHlsObject(this.storage, this.env.MINIO_BUCKET, objectKey, filePath, request, response);
+    await streamHlsObject(this.storage, storageBucket(this.env), objectKey, filePath, request, response);
   }
 
   async getCodeAlong(studentId: string, lessonId: string): Promise<StudentCodeAlongResponse> {
@@ -987,6 +987,32 @@ export class VideoLearningService {
     });
 
     return mapCodeAlongConfig(config);
+  }
+
+  async getInstructorCodeAlongConfig(instructorId: string, lessonId: string): Promise<CodeAlongConfigResponse> {
+    const lesson = await this.repository.findVideoLessonForInstructor(instructorId, lessonId);
+
+    if (!lesson) {
+      throw videoLearningNotAccessible();
+    }
+
+    const config = lesson.codeAlongConfig;
+    return mapCodeAlongConfig({
+      enabled: config?.enabled ?? false,
+      language: config?.language ?? DEFAULT_CODE_ALONG_LANGUAGE,
+      entryFile: config?.entryFile ?? DEFAULT_CODE_ALONG_ENTRY_FILE,
+      workspaceType: config?.workspaceType ?? null,
+      allowEditFiles: config?.allowEditFiles ?? null,
+      allowCreateFiles: config?.allowCreateFiles ?? null,
+      allowCreateFolders: config?.allowCreateFolders ?? null,
+      allowRenameFiles: config?.allowRenameFiles ?? null,
+      allowDeleteFiles: config?.allowDeleteFiles ?? null,
+      allowRun: config?.allowRun ?? null,
+      allowCheck: config?.allowCheck ?? null,
+      allowJudge: config?.allowJudge ?? null,
+      defaultPracticeBehavior: config?.defaultPracticeBehavior ?? null,
+      defaultVerificationStrategy: config?.defaultVerificationStrategy ?? null,
+    });
   }
 
   async updateProgress(studentId: string, videoAssetId: string, input: VideoProgressInput): Promise<VideoProgressResponse> {

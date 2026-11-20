@@ -92,7 +92,7 @@ interface CreateAppOptions {
   readonly prisma?: PrismaClient;
   readonly redis?: Redis;
   readonly rabbitmq?: import('amqplib').ChannelModel;
-  readonly storage?: import('minio').Client;
+  readonly storage?: import('./infrastructure/storage/client').ObjectStorageClient;
   readonly rateLimiterStore?: RateLimiterStore;
   readonly readinessChecker?: ReadinessChecker;
   readonly videoPublisher?: VideoMessagePublisher;
@@ -185,7 +185,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
           redis: options.redis,
           rabbitmq: options.rabbitmq,
           storage: options.storage,
-          minioBucket: env.MINIO_BUCKET,
+          minioBucket: (env.STORAGE_PROVIDER === 's3' ? env.AWS_S3_BUCKET : env.MINIO_BUCKET)!,
         })
       : async () => ({
           postgres: 'error',

@@ -33,6 +33,7 @@ const testEnv = loadEnv({
   DATABASE_URL: process.env.DATABASE_URL ?? 'postgresql://codesync:codesync_dev_password@localhost:5432/codesync_test',
   REDIS_URL: 'redis://localhost:6379',
   RABBITMQ_URL: 'amqp://codesync:codesync_dev_password@localhost:5672',
+  STORAGE_PROVIDER: 'minio',
   MINIO_ENDPOINT: 'localhost',
   MINIO_PORT: '9000',
   MINIO_ACCESS_KEY: 'codesync',
@@ -186,11 +187,30 @@ describe('video-code synchronization integration', () => {
     const { lesson } = await seedVideoLesson(instructor.id);
     const article = await seedVideoLesson(instructor.id, undefined, LessonType.ARTICLE);
 
+    const defaultConfig = await request(app)
+      .get(`/api/v1/instructor/lessons/${lesson.id}/code-along`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .expect(200);
+    expect(defaultConfig.body.config.enabled).toBe(false);
+    expect(defaultConfig.body.config.capabilities.allowRun).toBe(true);
+
     await request(app)
       .put(`/api/v1/instructor/lessons/${lesson.id}/code-along`)
       .set('Authorization', `Bearer ${instructor.token}`)
       .send({ enabled: true, language: 'typescript', entryFile: 'src/index.ts' })
       .expect(200);
+
+    const savedConfig = await request(app)
+      .get(`/api/v1/instructor/lessons/${lesson.id}/code-along`)
+      .set('Authorization', `Bearer ${instructor.token}`)
+      .expect(200);
+    expect(savedConfig.body.config.enabled).toBe(true);
+    expect(savedConfig.body.config.entryFile).toBe('src/index.ts');
+
+    await request(app)
+      .get(`/api/v1/instructor/lessons/${lesson.id}/code-along`)
+      .set('Authorization', `Bearer ${otherInstructor.token}`)
+      .expect(404);
 
     await request(app)
       .put(`/api/v1/instructor/lessons/${lesson.id}/code-along`)

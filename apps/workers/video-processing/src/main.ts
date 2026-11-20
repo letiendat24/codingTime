@@ -16,7 +16,7 @@ import {
 import { loadWorkerEnv } from './config';
 import { processVideo } from './ffmpeg';
 import { log, logError } from './logger';
-import { downloadObject, createStorageClient, uploadDirectory } from './storage';
+import { downloadObject, createStorageClient, uploadDirectory, storageBucket } from './storage';
 
 function parseMessage(message: ConsumeMessage): AsyncMessage<VideoProcessingRequestedPayload> {
   return JSON.parse(message.content.toString('utf8')) as AsyncMessage<VideoProcessingRequestedPayload>;
@@ -89,7 +89,7 @@ async function processMessage(input: {
     });
     await downloadObject({
       storage,
-      bucket: input.env.MINIO_BUCKET,
+      bucket: storageBucket(input.env),
       objectKey: envelope.payload.sourceObjectKey,
       targetPath: sourcePath,
     });
@@ -111,7 +111,7 @@ async function processMessage(input: {
 
     await uploadDirectory({
       storage,
-      bucket: input.env.MINIO_BUCKET,
+      bucket: storageBucket(input.env),
       directory: output.outputDirectory,
       objectPrefix: `videos/processed/${envelope.payload.videoAssetId}`,
     });

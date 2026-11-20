@@ -59,4 +59,7 @@ export const queryKeys = {
   instructorTranscripts: {
     list: (videoAssetId?: string | null) => ['instructor', 'transcripts', videoAssetId ?? 'none'] as const,
   },
+  instructorCodeAlong: {
+    config: (lessonId: string) => ['instructor', 'code-along', lessonId] as const,
+  },
 } as const;

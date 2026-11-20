@@ -100,6 +100,12 @@ export class VideoLearningController {
     response.status(200).json({ config: await this.videoLearning.upsertCodeAlongConfig(auth.userId, params.lessonId, body) });
   };
 
+  getInstructorCodeAlongConfig = async (request: Request, response: Response) => {
+    const auth = requireRequestAuth(request);
+    const params = lessonIdParamSchema.parse(request.params);
+    response.status(200).json({ config: await this.videoLearning.getInstructorCodeAlongConfig(auth.userId, params.lessonId) });
+  };
+
   listCheckpoints = async (request: Request, response: Response) => {
     const auth = requireRequestAuth(request);
     const params = videoAssetIdParamSchema.parse(request.params);

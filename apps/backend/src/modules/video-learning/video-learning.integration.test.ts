@@ -30,6 +30,7 @@ const testEnv: Env = {
   DATABASE_URL: process.env.DATABASE_URL ?? 'postgresql://codesync:codesync_dev_password@localhost:5432/codesync_test',
   REDIS_URL: 'redis://localhost:6379',
   RABBITMQ_URL: 'amqp://codesync:codesync_dev_password@localhost:5672',
+  STORAGE_PROVIDER: 'minio',
   MINIO_ENDPOINT: 'localhost',
   MINIO_PORT: 9000,
   MINIO_ACCESS_KEY: 'codesync',

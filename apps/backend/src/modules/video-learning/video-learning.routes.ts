@@ -27,6 +27,7 @@ export function createInstructorVideoLearningRouter(controller: VideoLearningCon
   const instructorOnly = [requireAuth(tokenService), requireRole(RoleName.INSTRUCTOR)] as const;
 
   router.post('/videos/:videoAssetId/checkpoints', ...instructorOnly, asyncHandler(controller.createCheckpoint));
+  router.get('/lessons/:lessonId/code-along', ...instructorOnly, asyncHandler(controller.getInstructorCodeAlongConfig));
   router.put('/lessons/:lessonId/code-along', ...instructorOnly, asyncHandler(controller.upsertCodeAlongConfig));
   router.get('/practice-problems/linkable', ...instructorOnly, asyncHandler(controller.listLinkablePracticeProblems));
   router.get('/videos/:videoAssetId/checkpoints', ...instructorOnly, asyncHandler(controller.listCheckpoints));

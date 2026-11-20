@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Request, Response } from 'express';
-import type { Client as MinioClient } from 'minio';
+import { storageBucket, type ObjectStorageClient } from '../../infrastructure/storage/client';
 import {
   LessonType,
   VideoAssetStatus,
@@ -28,10 +28,6 @@ import { VideoRepository, type VideoAssetWithDetails } from './video.repository'
 
 function toIso(value: Date | null | undefined) {
   return value ? value.toISOString() : null;
-}
-
-function sanitizeObjectStatContentType(value: string | undefined, fallback: string) {
-  return value && value.trim().length > 0 ? value : fallback;
 }
 
 function isTerminalOrActiveStatus(status: VideoAssetStatus) {
@@ -82,7 +78,7 @@ export class VideoService {
   constructor(
     private readonly prisma: PrismaClient,
     private readonly videos: VideoRepository,
-    private readonly storage: MinioClient,
+    private readonly storage: ObjectStorageClient,
     private readonly publisher: VideoMessagePublisher,
     private readonly env: Env,
     private readonly logger: AppLogger,
@@ -125,7 +121,7 @@ export class VideoService {
       sourceObjectKey: objectKey,
     });
     const uploadUrl = await this.storage.presignedPutObject(
-      this.env.MINIO_BUCKET,
+      storageBucket(this.env),
       video.sourceObjectKey,
       this.env.VIDEO_UPLOAD_URL_TTL_SECONDS,
     );
@@ -161,7 +157,11 @@ export class VideoService {
       }
 
       const object = await this.statSourceObject(video);
-      const contentType = sanitizeObjectStatContentType(object.metaData?.['content-type'], video.mimeType);
+      const contentType = object.metaData?.['content-type'];
+
+      if (!contentType || contentType !== video.mimeType) {
+        throw videoObjectMetadataMismatch();
+      }
 
       const objectSize = BigInt(object.size);
 
@@ -170,7 +170,7 @@ export class VideoService {
       }
 
       const storedObject = await repository.createStoredObject({
-        bucket: this.env.MINIO_BUCKET,
+        bucket: storageBucket(this.env),
         objectKey: video.sourceObjectKey,
         contentType,
         sizeBytes: objectSize,
@@ -251,7 +251,7 @@ export class VideoService {
     const filePath = sanitizeHlsPath(rawFilePath);
     const objectKey = `${processedPrefix(video.id)}/${filePath}`;
 
-    await streamHlsObject(this.storage, this.env.MINIO_BUCKET, objectKey, filePath, request, response);
+    await streamHlsObject(this.storage, storageBucket(this.env), objectKey, filePath, request, response);
   }
 
   async retry(instructorId: string, videoAssetId: string, correlationId: string): Promise<VideoStatusResponse> {
@@ -356,7 +356,7 @@ export class VideoService {
 
   private async statSourceObject(video: VideoAssetWithDetails) {
     try {
-      return await this.storage.statObject(this.env.MINIO_BUCKET, video.sourceObjectKey);
+      return await this.storage.statObject(storageBucket(this.env), video.sourceObjectKey);
     } catch {
       throw videoObjectMissing();
     }

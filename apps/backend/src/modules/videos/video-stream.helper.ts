@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import type { Client as MinioClient } from 'minio';
+import type { ObjectStorageClient } from '../../infrastructure/storage/client';
 import { extname } from 'node:path';
 import { HttpError } from '../../shared/http-error';
 
@@ -103,7 +103,7 @@ export function parseByteRange(rangeHeader: string, totalSize: number): ByteRang
 }
 
 export async function streamHlsObject(
-  storage: MinioClient,
+  storage: ObjectStorageClient,
   bucket: string,
   objectKey: string,
   filePath: string,

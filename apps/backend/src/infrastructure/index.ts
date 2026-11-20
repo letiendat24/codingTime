@@ -1,13 +1,13 @@
 import type { ChannelModel } from 'amqplib';
 import type Redis from 'ioredis';
-import type { Client as MinioClient } from 'minio';
+import type { ObjectStorageClient } from './storage/client';
 import type { PrismaClient } from '@prisma/client';
 import type { Env } from '../config';
 import type { AppLogger } from '../shared/logger';
 import { createPrismaClient } from './database/prisma';
 import { createRabbitMqConnection } from './rabbitmq/connection';
 import { createRedisClient } from './redis/client';
-import { createObjectStorageClient } from './storage/client';
+import { createObjectStorageClient, storageBucket } from './storage/client';
 import { CodeExecutionRepository } from '../modules/code-execution/code-execution.repository';
 import {
   CodeExecutionPublisher,
@@ -35,7 +35,7 @@ export interface InfrastructureClients {
   readonly prisma: PrismaClient;
   readonly redis: Redis;
   readonly rabbitmq: ChannelModel;
-  readonly storage: MinioClient;
+  readonly storage: ObjectStorageClient;
   readonly videoPublisher: VideoPublisher;
   readonly codeExecutionPublisher: CodeExecutionPublisher;
   readonly judgePublisher: JudgePublisher;
@@ -62,15 +62,15 @@ export async function initializeInfrastructure(
   await prisma.$connect();
   await redis.connect();
   await storage
-    .bucketExists(env.MINIO_BUCKET)
+    .bucketExists(storageBucket(env))
     .then(async (exists) => {
-      if (!exists) {
-        await storage.makeBucket(env.MINIO_BUCKET);
-        logger.info({ bucket: env.MINIO_BUCKET }, 'MinIO bucket created');
+      if (!exists && env.STORAGE_PROVIDER === 'minio') {
+        await storage.makeBucket(storageBucket(env));
+        logger.info({ bucket: storageBucket(env) }, 'MinIO bucket created');
       }
     })
     .catch((error: unknown) => {
-      logger.warn({ error, bucket: env.MINIO_BUCKET }, 'MinIO bucket is not available yet');
+      logger.warn({ error, bucket: storageBucket(env) }, 'Object storage bucket is not available yet');
     });
   const videoPublisherChannel = await setupVideoTopology(rabbitmq, env.VIDEO_PROCESSING_MAX_ATTEMPTS);
   const codeExecutionPublisherChannel = await setupCodeExecutionTopology(rabbitmq, env.CODE_EXECUTION_MAX_ATTEMPTS);

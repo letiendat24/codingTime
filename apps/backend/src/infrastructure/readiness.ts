@@ -1,6 +1,6 @@
 import type { ChannelModel } from 'amqplib';
 import type Redis from 'ioredis';
-import type { Client as MinioClient } from 'minio';
+import type { ObjectStorageClient } from './storage/client';
 import type { PrismaClient } from '@prisma/client';
 
 export type DependencyStatus = 'ok' | 'error';
@@ -27,7 +27,7 @@ export function createReadinessChecker(input: {
   readonly prisma: PrismaClient;
   readonly redis: Redis;
   readonly rabbitmq: ChannelModel;
-  readonly storage: MinioClient;
+  readonly storage: ObjectStorageClient;
   readonly minioBucket: string;
 }): ReadinessChecker {
   return async () => {

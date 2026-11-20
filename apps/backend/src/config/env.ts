@@ -9,11 +9,14 @@ const environmentSchema = z.object({
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
   RABBITMQ_URL: z.string().url(),
-  MINIO_ENDPOINT: z.string().min(1),
-  MINIO_PORT: z.coerce.number().int().min(1).max(65535),
-  MINIO_ACCESS_KEY: z.string().min(1),
-  MINIO_SECRET_KEY: z.string().min(1),
-  MINIO_BUCKET: z.string().min(1),
+  STORAGE_PROVIDER: z.enum(['minio', 's3']).default('minio'),
+  AWS_REGION: z.string().min(1).optional(),
+  AWS_S3_BUCKET: z.string().min(1).optional(),
+  MINIO_ENDPOINT: z.string().min(1).optional(),
+  MINIO_PORT: z.coerce.number().int().min(1).max(65535).optional(),
+  MINIO_ACCESS_KEY: z.string().min(1).optional(),
+  MINIO_SECRET_KEY: z.string().min(1).optional(),
+  MINIO_BUCKET: z.string().min(1).optional(),
   MINIO_PUBLIC_ENDPOINT: z.string().url().default('http://localhost:9000'),
   VIDEO_MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(1_073_741_824),
   VIDEO_UPLOAD_URL_TTL_SECONDS: z.coerce.number().int().positive().default(900),
@@ -168,6 +171,13 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
 
   if (parsed.data.NODE_ENV === 'production' && !parsed.data.COOKIE_SECURE) {
     throw new Error('COOKIE_SECURE must be true in production');
+  }
+
+  const required = parsed.data.STORAGE_PROVIDER === 's3'
+    ? ['AWS_REGION', 'AWS_S3_BUCKET'] as const
+    : ['MINIO_ENDPOINT', 'MINIO_PORT', 'MINIO_ACCESS_KEY', 'MINIO_SECRET_KEY', 'MINIO_BUCKET'] as const;
+  for (const key of required) {
+    if (!parsed.data[key]) throw new Error(`Missing ${key} for ${parsed.data.STORAGE_PROVIDER} storage`);
   }
 
   return {

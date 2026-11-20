@@ -26,6 +26,7 @@ import { Input } from '../../../design-system/components/input';
 import { Select } from '../../../design-system/components/select';
 import { Switch } from '../../../design-system/components/switch';
 import { type CodeSnapshotDetail, type LinkedPracticeProblemSummary, requestJson } from '../../../lib/api';
+import { queryKeys } from '../../../lib/query/keys';
 import { formatTime, parseTimeString, findPreviousSnapshot } from '../../../lib/video-learning';
 import { useTheme } from '../../../providers/theme-provider';
 import { useToast } from '../../../providers/toast-provider';
@@ -51,21 +52,22 @@ interface WorkspaceFileState {
 }
 
 interface CodeAlongConfigResponse {
-  readonly id: string;
-  readonly lessonId: string;
   readonly enabled: boolean;
   readonly language: string;
   readonly entryFile: string | null;
   readonly workspaceType: CodeAlongWorkspaceType;
   readonly defaultPracticeBehavior: VideoPracticeBehavior;
   readonly defaultVerificationStrategy: string;
-  readonly allowRun: boolean;
-  readonly allowCheck: boolean;
-  readonly allowJudge: boolean;
-  readonly allowCreateFiles: boolean;
-  readonly allowCreateFolders: boolean;
-  readonly allowRenameFiles: boolean;
-  readonly allowDeleteFiles: boolean;
+  readonly capabilities: {
+    readonly allowEditFiles: boolean;
+    readonly allowCreateFiles: boolean;
+    readonly allowCreateFolders: boolean;
+    readonly allowRenameFiles: boolean;
+    readonly allowDeleteFiles: boolean;
+    readonly allowRun: boolean;
+    readonly allowCheck: boolean;
+    readonly allowJudge: boolean;
+  };
 }
 
 interface CheckpointDetail {
@@ -199,11 +201,13 @@ export function CodeAlongStudio({
 
   // Query lesson code-along config
   const lessonConfigQuery = useQuery({
-    queryKey: ['instructor-video-lesson-code-along', lessonId],
+    queryKey: queryKeys.instructorCodeAlong.config(lessonId),
     queryFn: () =>
       requestJson<{ readonly config: CodeAlongConfigResponse }>(
         `/instructor/lessons/${lessonId}/code-along`,
       ),
+    retry: false,
+    staleTime: 60_000,
   });
 
   useEffect(() => {
@@ -215,12 +219,12 @@ export function CodeAlongStudio({
       setWorkspaceType(cfg.workspaceType || 'SINGLE_FILE');
       setDefaultPracticeBehavior(cfg.defaultPracticeBehavior || 'REQUIRED');
       setDefaultVerificationStrategy(cfg.defaultVerificationStrategy || 'AUTO');
-      setAllowRun(cfg.allowRun ?? true);
-      setAllowJudge(cfg.allowJudge ?? true);
-      setAllowCreateFiles(cfg.allowCreateFiles ?? false);
-      setAllowCreateFolders(cfg.allowCreateFolders ?? false);
-      setAllowRenameFiles(cfg.allowRenameFiles ?? false);
-      setAllowDeleteFiles(cfg.allowDeleteFiles ?? false);
+      setAllowRun(cfg.capabilities.allowRun);
+      setAllowJudge(cfg.capabilities.allowJudge);
+      setAllowCreateFiles(cfg.capabilities.allowCreateFiles);
+      setAllowCreateFolders(cfg.capabilities.allowCreateFolders);
+      setAllowRenameFiles(cfg.capabilities.allowRenameFiles);
+      setAllowDeleteFiles(cfg.capabilities.allowDeleteFiles);
     }
   }, [lessonConfigQuery.data]);
 
@@ -273,14 +277,14 @@ export function CodeAlongStudio({
       setWorkspaceType(data.config.workspaceType);
       setDefaultPracticeBehavior(data.config.defaultPracticeBehavior);
       setDefaultVerificationStrategy(data.config.defaultVerificationStrategy);
-      setAllowRun(data.config.allowRun);
-      setAllowJudge(data.config.allowJudge);
-      setAllowCreateFiles(data.config.allowCreateFiles);
-      setAllowCreateFolders(data.config.allowCreateFolders);
-      setAllowRenameFiles(data.config.allowRenameFiles);
-      setAllowDeleteFiles(data.config.allowDeleteFiles);
+      setAllowRun(data.config.capabilities.allowRun);
+      setAllowJudge(data.config.capabilities.allowJudge);
+      setAllowCreateFiles(data.config.capabilities.allowCreateFiles);
+      setAllowCreateFolders(data.config.capabilities.allowCreateFolders);
+      setAllowRenameFiles(data.config.capabilities.allowRenameFiles);
+      setAllowDeleteFiles(data.config.capabilities.allowDeleteFiles);
       toast.success('Video Code-Along Settings saved');
-      void queryClient.invalidateQueries({ queryKey: ['instructor-video-lesson-code-along', lessonId] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.instructorCodeAlong.config(lessonId) });
     },
     onError: (error) => {
       toast.error('Failed to save code-along settings', error instanceof Error ? error.message : undefined);
@@ -493,7 +497,7 @@ export function CodeAlongStudio({
       toast.success(editingSnapshotId ? 'Milestone updated' : 'Milestone snapshot captured');
       void queryClient.invalidateQueries({ queryKey: ['instructor-code-snapshots', videoAssetId] });
       void queryClient.invalidateQueries({ queryKey: ['instructor-video-checkpoints', videoAssetId] });
-      void queryClient.invalidateQueries({ queryKey: ['instructor-video-lesson-code-along', lessonId] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.instructorCodeAlong.config(lessonId) });
     },
     onError: (error) => {
       toast.error('Failed to save code snapshot', error instanceof Error ? error.message : undefined);
