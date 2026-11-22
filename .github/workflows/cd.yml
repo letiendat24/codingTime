@@ -63,7 +63,7 @@ jobs:
             backend frontend video-worker \
             code-worker code-judge-worker project-grading-worker
 
-          $COMPOSE --profile migration run --rm --no-deps backend-migrate
+          $COMPOSE --profile migration run --rm --no-deps -T --interactive=false backend-migrate
 
           $COMPOSE up -d --no-deps \
             backend frontend video-worker \
