@@ -21,12 +21,19 @@ jobs:
 
     steps:
       - name: Prepare SSH key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
         run: |
           mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.VPS_SSH_PRIVATE_KEY }}" > ~/.ssh/codingtime_deploy
-          chmod 600 ~/.ssh/codingtime_deploy
-          ssh-keyscan -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+          chmod 700 ~/.ssh
 
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/codingtime_deploy
+          chmod 600 ~/.ssh/codingtime_deploy
+
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          
       - name: Deploy to VPS
         env:
           DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}

@@ -6,7 +6,7 @@ import { Providers } from './providers';
 const siteUrl =
   process.env.NEXT_PUBLIC_APP_URL ||
   (process.env.NODE_ENV === 'production'
-    ? 'https://codingtime.dev'
+    ? 'https://codingtime.click'
     : 'http://localhost:3000');
 
 export const viewport: Viewport = {
