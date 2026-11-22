@@ -33,40 +33,42 @@ jobs:
 
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
-          
+
+      
       - name: Deploy to VPS
         env:
           DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_USER: ${{ secrets.VPS_USER }}
         run: |
           ssh \
+            -o StrictHostKeyChecking=yes \
             -i ~/.ssh/codingtime_deploy \
-            -p "${{ secrets.VPS_PORT }}" \
-            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" << EOF
-              set -e
+            -p "$VPS_PORT" \
+            "$VPS_USER@$VPS_HOST" \
+            "bash -se -- '$DEPLOY_SHA'" <<'REMOTE'
+          set -euo pipefail
 
-              cd /opt/codingtime
+          DEPLOY_SHA="$1"
+          cd /opt/codingtime
 
-              git fetch origin
-              git checkout main
-              git pull --ff-only origin main
+          sed -i \
+            "s/^CODESYNC_IMAGE_TAG=.*/CODESYNC_IMAGE_TAG=$DEPLOY_SHA/" \
+            .env.production
 
-              sed -i "s/^CODESYNC_IMAGE_TAG=.*/CODESYNC_IMAGE_TAG=${DEPLOY_SHA}/" .env.production
+          COMPOSE="docker compose --env-file .env.production -f infra/docker/docker-compose.deploy.yml"
 
-              docker compose \
-                --env-file .env.production \
-                -f infra/docker/docker-compose.deploy.yml \
-                pull
+          $COMPOSE pull \
+            backend frontend video-worker \
+            code-worker code-judge-worker project-grading-worker
 
-              docker compose \
-                --env-file .env.production \
-                -f infra/docker/docker-compose.deploy.yml \
-                --profile migration \
-                run --rm backend-migrate
+          $COMPOSE --profile migration run --rm --no-deps backend-migrate
 
-              docker compose \
-                --env-file .env.production \
-                -f infra/docker/docker-compose.deploy.yml \
-                up -d
+          $COMPOSE up -d --no-deps \
+            backend frontend video-worker \
+            code-worker code-judge-worker project-grading-worker
 
-              curl -f https://codingtime.click/api/v1/ready
-          EOF
+          curl --fail --retry 5 --retry-delay 3 \
+            https://codingtime.click/api/v1/ready
+          REMOTE
