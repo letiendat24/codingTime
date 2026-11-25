@@ -16,6 +16,28 @@ export interface ComparableCodeFile {
   readonly content: string;
 }
 
+export type VideoSeekKind = 'navigation' | 'practice-step';
+
+export function resolveVideoSeekRequest<TCheckpoint extends VideoLearningCheckpoint>(input: {
+  readonly kind: VideoSeekKind;
+  readonly currentSeconds: number;
+  readonly requestedSeconds: number;
+  readonly checkpoints: readonly TCheckpoint[];
+  readonly guard?: ((request: { readonly currentSeconds: number; readonly requestedSeconds: number }) => number | null | undefined) | undefined;
+}): { readonly seconds: number; readonly blockedCheckpoint?: TCheckpoint | undefined } {
+  const requestedSeconds = Math.max(0, input.requestedSeconds);
+  // An activated practice step only aligns playback backward to its own timestamp.
+  // Navigation and any forward jump still pass through the watched-time guard.
+  const guardedSeconds = input.kind === 'practice-step' && requestedSeconds <= input.currentSeconds
+    ? requestedSeconds
+    : Math.max(0, input.guard?.({ currentSeconds: input.currentSeconds, requestedSeconds }) ?? requestedSeconds);
+  const blockedCheckpoint = findBlockedSeekCheckpoint(input.currentSeconds, guardedSeconds, input.checkpoints);
+
+  return blockedCheckpoint
+    ? { seconds: blockedCheckpoint.timestampSeconds, blockedCheckpoint }
+    : { seconds: guardedSeconds };
+}
+
 export function formatTime(seconds: number): string {
   const safeSeconds = Math.max(0, Math.floor(seconds));
   const hours = Math.floor(safeSeconds / 3600);

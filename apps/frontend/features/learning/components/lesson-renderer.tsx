@@ -274,7 +274,7 @@ function VideoLessonView({
   const savePracticeWorkspaceRef = useRef<(() => Promise<void>) | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
-  const [requestedSeekSecond, setRequestedSeekSecond] = useState<number | null>(null);
+  const [requestedSeek, setRequestedSeek] = useState<{ readonly seconds: number; readonly kind: 'navigation' | 'practice-step' } | null>(null);
   const [selectedTranscriptId, setSelectedTranscriptId] = useState<string | null>(null);
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(false);
   const [activePracticeStep, setActivePracticeStep] = useState<VideoPracticeStep | null>(null);
@@ -704,8 +704,8 @@ function VideoLessonView({
     setSkippedPracticeStepId(null);
     clearPracticeFeedback();
     setSecondaryPanel(null);
-    setRequestedSeekSecond(step.timestampSeconds);
-    setTimeout(() => setRequestedSeekSecond(null), 100);
+    setRequestedSeek({ seconds: step.timestampSeconds, kind: 'practice-step' });
+    setTimeout(() => setRequestedSeek(null), 100);
     setPracticePauseSignal((value) => value + 1);
     setMobileMode('code');
   }, [clearPracticeFeedback]);
@@ -964,9 +964,9 @@ function VideoLessonView({
                     setSubtitlesEnabled(true);
                   }}
                   onSeek={(seconds) => {
-                    setRequestedSeekSecond(seconds);
+                    setRequestedSeek({ seconds, kind: 'navigation' });
                     setCurrentSecond(seconds);
-                    setTimeout(() => setRequestedSeekSecond(null), 100);
+                    setTimeout(() => setRequestedSeek(null), 100);
                   }}
                 />
               ) : null}
@@ -977,9 +977,9 @@ function VideoLessonView({
                   snapshots={snapshots}
                   activeSnapshotId={referenceSnapshotId}
                   onSelectSnapshot={(snap) => {
-                    setRequestedSeekSecond(snap.timestampSeconds);
+                    setRequestedSeek({ seconds: snap.timestampSeconds, kind: 'navigation' });
                     setCurrentSecond(snap.timestampSeconds);
-                    setTimeout(() => setRequestedSeekSecond(null), 100);
+                    setTimeout(() => setRequestedSeek(null), 100);
                   }}
                 />
               ) : null}
@@ -1034,7 +1034,8 @@ function VideoLessonView({
               onCheckpointCrossed={setActiveCheckpoint}
               onProgress={handleProgress}
               onTimeChange={handleTimeChange}
-              seekToSeconds={requestedSeekSecond}
+              seekToSeconds={requestedSeek?.seconds}
+              seekKind={requestedSeek?.kind}
               subtitleText={subtitleText}
               pauseSignal={practicePauseSignal}
               resumeSignal={practiceResumeSignal}

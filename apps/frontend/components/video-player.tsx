@@ -6,8 +6,10 @@ import Hls from 'hls.js';
 import {
   findBlockedSeekCheckpoint,
   findTriggeredCheckpoint,
+  resolveVideoSeekRequest,
   resolvePlaybackUrl,
   shouldSaveVideoProgress,
+  type VideoSeekKind,
 } from '../lib/video-learning';
 import { getAccessToken } from '../lib/api/client';
 import type { VideoCheckpoint } from '../lib/api';
@@ -32,6 +34,7 @@ interface VideoPlayerProps {
   readonly onProgress?: ((positionSeconds: number) => void) | undefined;
   readonly onTimeChange?: ((positionSeconds: number) => void) | undefined;
   readonly seekToSeconds?: number | null | undefined;
+  readonly seekKind?: VideoSeekKind | undefined;
   readonly subtitleText?: string | null | undefined;
   readonly pauseSignal?: number | undefined;
   readonly resumeSignal?: number | undefined;
@@ -51,6 +54,7 @@ export function VideoPlayer({
   onProgress,
   onTimeChange,
   seekToSeconds,
+  seekKind = 'navigation',
   subtitleText,
   pauseSignal,
   resumeSignal,
@@ -137,14 +141,24 @@ export function VideoPlayer({
     }
 
     const applySeek = () => {
-      const currentSeconds = previousTimeRef.current;
-      const requestedSeconds = Math.max(0, seekToSeconds);
-      const guardedSeconds = onSeekRequestRef.current?.({ currentSeconds, requestedSeconds });
-      const effectiveSeconds = Math.max(0, guardedSeconds ?? requestedSeconds);
-      suppressSeekCheckRef.current = true;
-      video.currentTime = effectiveSeconds;
+      const target = resolveVideoSeekRequest({
+        kind: seekKind,
+        currentSeconds: video.currentTime,
+        requestedSeconds: seekToSeconds,
+        checkpoints: checkpointsRef.current,
+        guard: onSeekRequestRef.current,
+      });
+      if (Math.abs(video.currentTime - target.seconds) > 0.01) {
+        suppressSeekCheckRef.current = true;
+        video.currentTime = target.seconds;
+      }
       previousTimeRef.current = video.currentTime;
       onTimeChangeRef.current?.(video.currentTime);
+      if (target.blockedCheckpoint) {
+        triggeredCheckpointIdsRef.current.add(target.blockedCheckpoint.id);
+        void video.pause();
+        onCheckpointCrossedRef.current?.(target.blockedCheckpoint);
+      }
     };
 
     if (Number.isNaN(video.duration)) {
@@ -153,7 +167,7 @@ export function VideoPlayer({
     }
 
     applySeek();
-  }, [seekToSeconds]);
+  }, [seekToSeconds, seekKind]);
 
   useEffect(() => {
     if (!pauseSignal) {

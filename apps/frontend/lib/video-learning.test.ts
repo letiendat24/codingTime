@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   compareCodeFiles,
   findBlockedSeekCheckpoint,
@@ -7,6 +7,7 @@ import {
   formatTime,
   parseTimeString,
   resolvePlaybackUrl,
+  resolveVideoSeekRequest,
   selectNextSnapshot,
   selectSnapshotAtOrBefore,
   shouldSaveVideoProgress,
@@ -48,6 +49,32 @@ describe('video learning helpers', () => {
     expect(findBlockedSeekCheckpoint(20, 80, checkpoints)?.id).toBe('required');
     expect(findBlockedSeekCheckpoint(80, 20, checkpoints)).toBeUndefined();
     expect(findBlockedSeekCheckpoint(70, 95, checkpoints)).toBeUndefined();
+  });
+
+  it('aligns an activated practice step without clamping it to stale saved progress', () => {
+    const staleProgressGuard = vi.fn(() => 1);
+    const target = resolveVideoSeekRequest({
+      kind: 'practice-step',
+      currentSeconds: 15.2,
+      requestedSeconds: 15,
+      checkpoints,
+      guard: staleProgressGuard,
+    });
+
+    expect(target.seconds).toBe(15);
+    expect(staleProgressGuard).not.toHaveBeenCalled();
+  });
+
+  it('keeps navigation and forward practice seeks behind the watched-time and checkpoint guards', () => {
+    const watchedTimeGuard = vi.fn(() => 35);
+    expect(resolveVideoSeekRequest({
+      kind: 'navigation', currentSeconds: 10, requestedSeconds: 80, checkpoints, guard: watchedTimeGuard,
+    }).seconds).toBe(35);
+    expect(watchedTimeGuard).toHaveBeenCalledTimes(1);
+
+    expect(resolveVideoSeekRequest({
+      kind: 'practice-step', currentSeconds: 10, requestedSeconds: 80, checkpoints, guard: () => 80,
+    })).toEqual({ seconds: 60, blockedCheckpoint: checkpoints[1] });
   });
 
   it('selects the latest code snapshot at or before current playback time', () => {
