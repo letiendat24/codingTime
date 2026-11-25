@@ -58,6 +58,7 @@ export function VideoPlayer({
   onSeekRequest,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const initialPositionRef = useRef(initialPositionSeconds);
   const previousTimeRef = useRef(initialPositionSeconds);
   const lastSavedAtRef = useRef(0);
   const lastSavedPositionRef = useRef(initialPositionSeconds);
@@ -112,8 +113,13 @@ export function VideoPlayer({
   }, [onSeekRequest]);
 
   useEffect(() => {
-    previousTimeRef.current = initialPositionSeconds;
-    lastSavedPositionRef.current = initialPositionSeconds;
+    initialPositionRef.current = initialPositionSeconds;
+  }, [initialPositionSeconds]);
+
+  useEffect(() => {
+    const initialPosition = initialPositionRef.current;
+    previousTimeRef.current = initialPosition;
+    lastSavedPositionRef.current = initialPosition;
     lastSavedAtRef.current = 0;
     triggeredCheckpointIdsRef.current = new Set();
     setPlaybackError(null);
@@ -121,7 +127,7 @@ export function VideoPlayer({
     setQualityOptions([]);
     setSelectedQuality({ mode: 'AUTO' });
     setEffectiveLevelIndex(null);
-  }, [initialPositionSeconds, playbackUrl, retryCount]);
+  }, [playbackUrl, retryCount]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -197,6 +203,7 @@ export function VideoPlayer({
     }
 
     const video: HTMLVideoElement = currentVideo;
+    const initialPosition = initialPositionRef.current;
     let destroyed = false;
     let hls: Hls | undefined;
     let initialPositionApplied = false;
@@ -309,12 +316,12 @@ export function VideoPlayer({
     }
 
     function applyInitialPosition() {
-      if (initialPositionApplied || initialPositionSeconds <= 0 || Number.isNaN(video.duration)) {
+      if (initialPositionApplied || initialPosition <= 0 || Number.isNaN(video.duration)) {
         return;
       }
 
       initialPositionApplied = true;
-      video.currentTime = Math.min(initialPositionSeconds, video.duration);
+      video.currentTime = Math.min(initialPosition, video.duration);
       previousTimeRef.current = video.currentTime;
       onTimeChangeRef.current?.(video.currentTime);
     }
@@ -433,7 +440,7 @@ export function VideoPlayer({
         video.load();
       }
     };
-  }, [initialPositionSeconds, playbackUrl, retryCount]);
+  }, [playbackUrl, retryCount]);
 
   const effectiveQualityLabel = currentAutoQualityLabel(qualityOptions, effectiveLevelIndex);
   const selectedQualityLabel =
